@@ -182,6 +182,20 @@ func (s *Store) RemoveRoute(id string) {
 func (s *Store) UpdateRoute(r *model.Route) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if r.Path == "" {
+		return fmt.Errorf("path is required")
+	}
+	if r.TargetPort == 0 && r.Redirect == "" && r.StaticDir == "" && len(r.Upstreams) == 0 {
+		return fmt.Errorf("target port, upstreams, static dir, or redirect URL is required")
+	}
+	for _, ex := range s.Routes {
+		if ex.ID == r.ID {
+			continue
+		}
+		if ex.Path == r.Path && ex.Host == r.Host {
+			return fmt.Errorf("route conflict with %s%s", r.Host, r.Path)
+		}
+	}
 	for i, ex := range s.Routes {
 		if ex.ID == r.ID {
 			s.Routes[i] = r
