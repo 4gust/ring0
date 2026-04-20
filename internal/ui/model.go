@@ -540,16 +540,24 @@ func (m *Model) openRouteForm(r *model.Route) {
 	}
 	m.inputIdx = 0
 	m.inputs = []textinput.Model{
-		newInput("Path  ", "/api"),
-		newInput("Host  ", "(optional)"),
-		newInput("Port  ", "3000"),
-		newInput("Vis   ", "public|private"),
+		newInput("Path     ", "/api"),
+		newInput("Host     ", "(optional)"),
+		newInput("Port     ", "3000  (omit if Redirect set)"),
+		newInput("Vis      ", "public|private"),
+		newInput("Strip    ", "y|n  (strip path prefix before forwarding)"),
+		newInput("Redirect ", "https://example.com  (optional, sends 308)"),
 	}
 	if r != nil {
 		m.inputs[0].SetValue(r.Path)
 		m.inputs[1].SetValue(r.Host)
 		m.inputs[2].SetValue(fmt.Sprintf("%d", r.TargetPort))
 		m.inputs[3].SetValue(string(r.Visibility))
+		if r.StripPrefix {
+			m.inputs[4].SetValue("y")
+		} else {
+			m.inputs[4].SetValue("n")
+		}
+		m.inputs[5].SetValue(r.Redirect)
 	}
 	m.inputs[0].Focus()
 }
@@ -612,11 +620,17 @@ func (m Model) submitForm() (tea.Model, tea.Cmd) {
 		if vis != model.Public && vis != model.Private {
 			vis = model.Private
 		}
+		strip := false
+		if v := strings.ToLower(strings.TrimSpace(m.inputs[4].Value())); v == "y" || v == "yes" || v == "true" || v == "1" {
+			strip = true
+		}
 		r := &model.Route{
-			Path:       strings.TrimSpace(m.inputs[0].Value()),
-			Host:       strings.TrimSpace(m.inputs[1].Value()),
-			TargetPort: port,
-			Visibility: vis,
+			Path:        strings.TrimSpace(m.inputs[0].Value()),
+			Host:        strings.TrimSpace(m.inputs[1].Value()),
+			TargetPort:  port,
+			Visibility:  vis,
+			StripPrefix: strip,
+			Redirect:    strings.TrimSpace(m.inputs[5].Value()),
 		}
 		if m.form == formEditRoute && m.editing != nil {
 			r.ID = m.editing.ID
@@ -716,16 +730,22 @@ func (m Model) View() string {
 
 	leftW := ew / 2
 	rightW := ew - leftW
-	colH := bodyH / 2
+	// Apps + Logs are the workhorses → 70% of body height.
+	// Routes + System are reference data → 30%.
+	colH := (bodyH * 70) / 100
 	colHB := bodyH - colH
+	if colHB < 7 {
+		colHB = 7
+		colH = bodyH - colHB
+	}
 
 	apps := m.renderPanel(PanelApps, leftW, colH, m.viewApps(leftW-4, colH-3))
 	routes := m.renderPanel(PanelRoutes, leftW, colHB, m.viewRoutes(leftW-4, colHB-3))
-	sysv := m.renderPanel(PanelSystem, rightW, colH, m.viewSystem(rightW-4, colH-3))
-	logs := m.renderPanel(PanelLogs, rightW, colHB, m.viewLogs(rightW-4, colHB-3))
+	logs := m.renderPanel(PanelLogs, rightW, colH, m.viewLogs(rightW-4, colH-3))
+	sysv := m.renderPanel(PanelSystem, rightW, colHB, m.viewSystem(rightW-4, colHB-3))
 
 	left := lipgloss.JoinVertical(lipgloss.Left, apps, routes)
-	right := lipgloss.JoinVertical(lipgloss.Left, sysv, logs)
+	right := lipgloss.JoinVertical(lipgloss.Left, logs, sysv)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 
 	out := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)

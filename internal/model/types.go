@@ -35,11 +35,13 @@ const (
 	Private Visibility = "private"
 )
 
-// Route maps an inbound path/host to a target port (logical only — no proxy here).
+// Route maps an inbound path/host to a target port (or to a redirect URL).
 type Route struct {
-	ID         string     `json:"id"`
-	Path       string     `json:"path"` // e.g. "/api"
-	Host       string     `json:"host"` // optional, e.g. "api.local"
-	TargetPort int        `json:"target_port"`
-	Visibility Visibility `json:"visibility"`
+	ID          string     `json:"id"`
+	Path        string     `json:"path"` // e.g. "/api"
+	Host        string     `json:"host"` // optional, e.g. "api.local"
+	TargetPort  int        `json:"target_port"`
+	Visibility  Visibility `json:"visibility"`
+	StripPrefix bool       `json:"strip_prefix"` // strip Path before forwarding
+	Redirect    string     `json:"redirect"`     // if non-empty, send 308 to this URL (overrides proxy)
 }

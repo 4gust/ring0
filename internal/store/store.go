@@ -36,11 +36,39 @@ func New() (*Store, error) {
 	}
 	// Nothing is actually running at launch. Clear any stale running/crashed
 	// statuses so the UI reflects reality.
+	dirty := false
+	seen := map[string]bool{}
 	for _, a := range s.Apps {
 		a.Status = model.StatusStopped
 		a.PID = 0
+		// Backfill missing/duplicate IDs so each app has a unique log buffer.
+		if a.ID == "" || seen[a.ID] {
+			a.ID = fmt.Sprintf("app-%d-%s", time.Now().UnixNano(), a.Name)
+			dirty = true
+		}
+		seen[a.ID] = true
+	}
+	seenR := map[string]bool{}
+	for _, r := range s.Routes {
+		if r.ID == "" || seenR[r.ID] {
+			r.ID = fmt.Sprintf("route-%d-%s", time.Now().UnixNano(), r.Path)
+			dirty = true
+		}
+		seenR[r.ID] = true
+	}
+	if dirty {
+		_ = saveLocked(p, s)
 	}
 	return s, nil
+}
+
+// saveLocked is used during New() before the mutex is needed.
+func saveLocked(p string, s *Store) error {
+	data, err := json.MarshalIndent(s, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(p, data, 0o644)
 }
 
 func (s *Store) Save() error {
@@ -122,8 +150,8 @@ func (s *Store) AddRoute(r *model.Route) error {
 	if r.Path == "" {
 		return fmt.Errorf("path is required")
 	}
-	if r.TargetPort == 0 {
-		return fmt.Errorf("target port is required")
+	if r.TargetPort == 0 && r.Redirect == "" {
+		return fmt.Errorf("target port or redirect URL is required")
 	}
 	for _, ex := range s.Routes {
 		if ex.Path == r.Path && ex.Host == r.Host {

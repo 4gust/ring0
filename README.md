@@ -105,6 +105,114 @@ rm -rf ~/.ring0
 | `port already in use` toast | Pick a different port or stop the conflicting app |
 | State seems wrong | `rm -rf ~/.ring0` to start fresh |
 
+## Reverse proxy (nginx replacement)
+
+ring0 ships a built-in HTTP reverse proxy that routes by **path prefix** + optional **host header** to your local apps. One public port, many backends — no nginx needed.
+
+### Quick start
+
+```bash
+# Start ring0 with the proxy listening on :8080
+ring0 --proxy :8080
+# or:
+RING0_PROXY_ADDR=:8080 ring0
+```
+
+Add a route from the UI: press `2` (Routes) → `a` (add). Example:
+
+```
+Path     /api
+Host     (empty = match any host)
+Port     3001
+Vis      public
+Strip    n
+Redirect (empty)
+```
+
+That sends every request matching `/api` or `/api/*` to `http://127.0.0.1:3001`.
+The route reload is live — no restart needed.
+
+### Open exactly one port (Azure / cloud)
+
+```bash
+az vm open-port -g <RG> -n <VM> --port 8080 --priority 1010
+```
+
+Now `http://YOUR_VM_IP:8080/api/...` reaches your backend. Your app ports stay closed.
+
+### Features (the nginx-equivalents)
+
+| nginx feature | ring0 equivalent |
+|---|---|
+| `location /api { proxy_pass http://127.0.0.1:3001; }` | Route: `Path=/api`, `Port=3001` |
+| `proxy_set_header Host $host;` | automatic |
+| `proxy_set_header X-Real-IP $remote_addr;` | automatic |
+| `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` | automatic |
+| `proxy_set_header X-Forwarded-Proto $scheme;` | automatic |
+| `rewrite ^/api/(.*) /$1 break;` | Set `Strip = y` on the route |
+| `proxy_http_version 1.1; Upgrade $http_upgrade;` (websockets) | automatic |
+| `return 308 https://example.com$request_uri;` | Set `Redirect = https://example.com` on the route |
+| `server_name api.example.com;` | Set `Host = api.example.com` on the route |
+| `location /` (catch-all) | Route with `Path = /` |
+| Reload config without dropping connections | UI add/edit/delete reloads atomically |
+
+### Path matching rules
+
+- **Longest prefix wins.** `/api/v2 → port 9000` is preferred over `/api → port 8000` even if both match.
+- A route with `Path = /` is a catch-all (use it last; long prefixes still win).
+- Path matches are exact-or-segment: `/api` matches `/api` and `/api/users`, but **not** `/apiary`.
+
+### Strip vs no-strip
+
+| Strip | Request `GET /api/users` becomes upstream… |
+|---|---|
+| `n` (default) | `GET /api/users` |
+| `y` | `GET /users` |
+
+Use `y` when your backend doesn't know about the `/api` prefix (most APIs).
+
+### Redirects
+
+Set `Redirect = https://example.com` and any matching path returns **HTTP 308 Permanent Redirect** to the URL. `Port` is ignored in this mode. Use it for:
+
+- Forcing HTTPS: `Path = /`, `Redirect = https://example.com`
+- Rebranding domains
+- Sending old paths to new locations
+
+### Host-based routing (virtual hosts)
+
+```
+Path = /        Host = api.example.com   Port = 3001
+Path = /        Host = app.example.com   Port = 5173
+```
+
+Point both DNS records at your VM, set `--proxy :80` (needs root or `setcap`), and ring0 routes by `Host` header — same as nginx `server_name`.
+
+### Binding to port 80 / 443 without root
+
+```bash
+sudo setcap 'cap_net_bind_service=+ep' "$(which ring0)"
+ring0 --proxy :80
+```
+
+### WebSockets / SSE / HMR
+
+Just work. The proxy uses Go's `httputil.ReverseProxy` which handles HTTP/1.1 `Upgrade` transparently. Vite HMR and Socket.io both pass through unchanged.
+
+### Live status
+
+The System Monitor panel (`3`) shows `proxy: :8080   hits: N` so you can confirm requests are arriving.
+
+### What ring0 does **not** do (yet)
+
+- TLS termination → run behind Caddy or use Cloudflare in front
+- Rate limiting / WAF
+- gRPC-specific framing
+- Caching
+
+If you need any of those, point Caddy at `ring0 --proxy :8080` for TLS + add ring0's per-app routing on top.
+
+
 ## Layout
 
 Four panels, always visible:
