@@ -657,7 +657,7 @@ func (m Model) View() string {
 	}
 
 	// Outer margin: 10 rows top, 1 row bottom, 2 cols left/right.
-	const marginX, marginTop, marginBottom = 2, 10, 1
+	const marginX, marginTop, marginBottom = 2, 4, 1
 	ew := m.w - marginX*2
 	eh := m.h - marginTop - marginBottom
 	if ew < 20 || eh < 10 {
