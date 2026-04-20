@@ -356,20 +356,23 @@ func (m Model) keyApps(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "s":
 		if a := m.currentApp(); a != nil {
-			if err := m.pm.Start(a); err != nil {
+			if m.pm.Running(a.ID) {
+				m.flash(toastInfo, "● "+a.Name+" is already running")
+			} else if err := m.pm.Start(a); err != nil {
 				m.flash(toastErr, "✖ "+err.Error())
 			} else {
-				m.active = PanelLogs
-				m.logFollow = true
-				m.logScroll = 0
-				m.flash(toastInfo, "▶ starting "+a.Name+"…")
+				m.flash(toastOK, "▶ started "+a.Name)
 			}
 		}
 		return m, nil
 	case "x":
 		if a := m.currentApp(); a != nil {
-			if err := m.pm.Stop(a); err != nil {
+			if !m.pm.Running(a.ID) {
+				m.flash(toastInfo, "■ "+a.Name+" is not running")
+			} else if err := m.pm.Stop(a); err != nil {
 				m.flash(toastWarn, "⚠ "+err.Error())
+			} else {
+				m.flash(toastInfo, "■ stopping "+a.Name+"…")
 			}
 		}
 		return m, nil
@@ -378,23 +381,17 @@ func (m Model) keyApps(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err := m.pm.Restart(a); err != nil {
 				m.flash(toastErr, "✖ "+err.Error())
 			} else {
-				m.active = PanelLogs
-				m.logFollow = true
-				m.logScroll = 0
-				m.flash(toastInfo, "↻ restarting "+a.Name+"…")
+				m.flash(toastInfo, "↻ restarting "+a.Name)
 			}
 		}
 		return m, nil
 	case "u":
 		if a := m.currentApp(); a != nil {
 			m.pm.UpdateAndStart(a)
-			m.active = PanelLogs
-			m.logFollow = true
-			m.logScroll = 0
-			m.flash(toastInfo, "↓ update+start "+a.Name+"…")
+			m.flash(toastInfo, "↓ update+start "+a.Name)
 		}
 		return m, nil
-	case "l":
+	case "l", "enter":
 		m.active = PanelLogs
 		m.logFollow = true
 		m.logScroll = 0
