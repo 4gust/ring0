@@ -11,6 +11,7 @@ import (
 
 	"github.com/4gust/ring0/internal/model"
 	"github.com/4gust/ring0/internal/proc"
+	"github.com/4gust/ring0/internal/proxy"
 	"github.com/4gust/ring0/internal/store"
 	"github.com/4gust/ring0/internal/sysmon"
 )
@@ -77,6 +78,7 @@ const (
 type Model struct {
 	store *store.Store
 	pm    *proc.Manager
+	px    *proxy.Server // optional reverse-proxy server
 
 	w, h   int
 	active Panel
@@ -141,14 +143,18 @@ func waitStatus(ch <-chan proc.StatusEvent) tea.Cmd {
 }
 
 // New constructs the root model.
-func New(s *store.Store, pm *proc.Manager) Model {
+func New(s *store.Store, pm *proc.Manager, px *proxy.Server) Model {
 	si := textinput.New()
 	si.Prompt = "/ "
 	si.Placeholder = "search…"
 	si.CharLimit = 64
+	if px != nil {
+		px.Reload(s.ListRoutes())
+	}
 	return Model{
 		store:     s,
 		pm:        pm,
+		px:        px,
 		active:    PanelApps,
 		logFollow: true,
 		search:    si,
@@ -435,6 +441,9 @@ func (m Model) keyRoutes(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.confirm(fmt.Sprintf("Delete route %q? (y/N)", path), func() tea.Cmd {
 				m.store.RemoveRoute(id)
 				_ = m.store.Save()
+				if m.px != nil {
+					m.px.Reload(m.store.ListRoutes())
+				}
 				m.flash(toastOK, "✔ deleted "+path)
 				return nil
 			})
@@ -622,6 +631,9 @@ func (m Model) submitForm() (tea.Model, tea.Cmd) {
 			}
 		}
 		_ = m.store.Save()
+		if m.px != nil {
+			m.px.Reload(m.store.ListRoutes())
+		}
 		m.flash(toastOK, "✔ saved route "+r.Path)
 	}
 	m.mode = ModeNormal
@@ -948,8 +960,14 @@ func (m Model) viewSystem(w, h int) string {
 	}
 	summary := StyleDim.Render(fmt.Sprintf("apps: %d running / %d total    routes: %d",
 		running, len(apps), len(m.store.ListRoutes())))
+	pxLine := ""
+	if m.px != nil {
+		pxLine = lipgloss.NewStyle().Foreground(ColorGreen).Render(fmt.Sprintf("proxy: %s    hits: %d", m.px.Addr(), m.px.Hits()))
+	} else {
+		pxLine = StyleDim.Render("proxy: off (start with --proxy :8080)")
+	}
 
-	top := strings.Join([]string{cpu, mem + memTxt, "", spark, mspark, "", summary}, "\n")
+	top := strings.Join([]string{cpu, mem + memTxt, "", spark, mspark, "", summary, pxLine}, "\n")
 
 	// Build the pet area: stats line + 3-row pet + floor. Always rendered.
 	petStats, petFrame := m.petBlock()
