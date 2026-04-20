@@ -1,5 +1,4 @@
 package ui
-package ui
 
 // Pet is a 3-row ASCII buddy with happy/sleep/alert variants.
 type Pet struct {
