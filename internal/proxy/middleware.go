@@ -31,6 +31,13 @@ func (g *gzipResponseWriter) Write(b []byte) (int, error) { return g.gz.Write(b)
 
 func gzipMW(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Bypass for protocol upgrades (WebSocket, h2c) — gzip wrapping
+		// breaks Hijack().
+		if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") ||
+			strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade") {
+			h.ServeHTTP(w, r)
+			return
+		}
 		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			h.ServeHTTP(w, r)
 			return
