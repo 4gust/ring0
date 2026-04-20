@@ -39,9 +39,9 @@ type StatusEvent struct {
 }
 
 type managed struct {
-	cmd        *exec.Cmd
-	cancel     chan struct{}
-	stopping   bool // true if Stop() was called — don't flag exit as crash
+	cmd      *exec.Cmd
+	cancel   chan struct{}
+	stopping bool // true if Stop() was called — don't flag exit as crash
 }
 
 func NewManager() *Manager {

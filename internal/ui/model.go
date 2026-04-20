@@ -247,6 +247,20 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab":
 		m.active = (m.active + 3) % 4
 		return m, nil
+	case "1":
+		m.active = PanelApps
+		return m, nil
+	case "2":
+		m.active = PanelRoutes
+		return m, nil
+	case "3":
+		m.active = PanelSystem
+		return m, nil
+	case "4":
+		m.active = PanelLogs
+		m.logFollow = true
+		m.logScroll = 0
+		return m, nil
 	case "/":
 		m.mode = ModeSearch
 		m.search.SetValue("")
@@ -806,14 +820,14 @@ func (m Model) renderFooter(width int) string {
 }
 
 func (m Model) contextKeys() string {
-	common := "tab:panel  /:search  q:quit"
+	common := "1-4:panel  tab:next  /:search  q:quit"
 	switch m.active {
 	case PanelApps:
-		return "a:add  s:start  x:stop  r:restart  u:update  l:logs  d:del  " + common
+		return "↑↓/jk:select  a:add  s:start  x:stop  r:restart  u:update  l:logs  d:del  " + common
 	case PanelRoutes:
-		return "a:add  e:edit  d:del  " + common
+		return "↑↓/jk:select  a:add  e:edit  d:del  " + common
 	case PanelLogs:
-		return "f:follow  g/G:top/bot  " + common
+		return "↑↓/jk:scroll  f:follow  g/G:top/bot  " + common
 	}
 	return common
 }
@@ -825,7 +839,14 @@ func (m Model) renderPanel(p Panel, w, h int, body string) string {
 		style = StylePanelActive
 		titleColor = ColorBlue
 	}
-	title := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(" " + p.Title() + " ")
+	titleTxt := p.Title()
+	// Logs panel shows which app it is tailing.
+	if p == PanelLogs {
+		if a := m.currentApp(); a != nil {
+			titleTxt = fmt.Sprintf("Logs — %s", a.Name)
+		}
+	}
+	title := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(" " + titleTxt + " ")
 	// Border takes 2 rows, title takes 1 row → inner gets h-3.
 	inner := lipgloss.NewStyle().Width(w - 2).Height(h - 3).Render(body)
 	return style.Width(w).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, title, inner))
