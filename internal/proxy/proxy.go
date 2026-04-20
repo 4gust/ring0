@@ -3,54 +3,63 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/crypto/acme/autocert"
+
 	"github.com/4gust/ring0/internal/model"
 )
 
-// Server is a single HTTP listener that reverse-proxies (or redirects)
-// based on path + optional host prefixes pulled from the route store.
+// Server is a single (or HTTPS+HTTP) listener that reverse-proxies, serves
+// static files, redirects, or load-balances based on path + optional host.
 //
-// Features:
-//   - Path-prefix routing with optional host match
-//   - Longest-prefix-wins
-//   - Permanent redirects (308) when Route.Redirect is set
-//   - Optional StripPrefix (like nginx `rewrite ^/api(/.*)$ $1 break`)
-//   - X-Forwarded-{For,Proto,Host} + X-Real-IP headers (nginx-compatible)
-//   - WebSocket upgrades (handled transparently by net/http/httputil)
-//   - Hot reload — Reload() can be called any time without dropping conns
+// Per-route features: redirect, strip-prefix, static-dir, multi-upstream
+// load-balancing, health checks, gzip, basic-auth, IP allow-list, rate-limit,
+// CORS. Server-level: TLS via Let's Encrypt (autocert) → HTTP/2 free.
 type Server struct {
 	addr   string
 	mu     sync.RWMutex
 	routes []routeEntry
 	srv    *http.Server
 	hits   atomic.Int64
+
+	cfg      *model.ServerConfig
+	accessFh *os.File
+	cancelHC context.CancelFunc
 }
 
 type routeEntry struct {
-	host        string // optional, lowercased; empty = any host
-	prefix      string // path prefix, e.g. "/api"
-	target      *url.URL
-	proxy       *httputil.ReverseProxy
+	host        string
+	prefix      string
 	stripPrefix bool
-	redirect    string // if set, send 308 here instead of proxying
+	redirect    string
+	staticDir   string
+	target      *url.URL // first upstream (for index display)
+	pool        *upstreamPool
+	handler     http.Handler // wrapped with middleware
 }
 
-// New returns a not-yet-started proxy bound to addr (e.g. ":8080").
+// New returns a not-yet-started proxy bound to addr.
 func New(addr string) *Server { return &Server{addr: addr} }
 
 func (s *Server) Addr() string { return s.addr }
 func (s *Server) Hits() int64  { return s.hits.Load() }
 
-// Routes returns a snapshot of installed routes for diagnostics.
+// SetConfig installs server-level config (TLS, access log).
+func (s *Server) SetConfig(c *model.ServerConfig) { s.cfg = c }
+
+// Routes returns a snapshot for diagnostics.
 func (s *Server) Routes() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -60,19 +69,43 @@ func (s *Server) Routes() []string {
 		if host == "" {
 			host = "*"
 		}
-		dst := e.target.String()
-		if e.redirect != "" {
+		var dst string
+		switch {
+		case e.redirect != "":
 			dst = "redirect → " + e.redirect
-		} else if e.stripPrefix {
-			dst += " (strip)"
+		case e.staticDir != "":
+			dst = "static " + e.staticDir
+		case e.pool != nil:
+			dst = "pool " + e.pool.summary()
 		}
 		out = append(out, fmt.Sprintf("%s%s → %s", host, e.prefix, dst))
 	}
 	return out
 }
 
-// Reload swaps the routing table atomically.
+func (p *upstreamPool) summary() string {
+	if p == nil {
+		return ""
+	}
+	parts := make([]string, len(p.all))
+	for i, u := range p.all {
+		flag := "✓"
+		if !u.healthy.Load() {
+			flag = "✗"
+		}
+		parts[i] = flag + u.url.Host
+	}
+	return strings.Join(parts, ",")
+}
+
+// Reload swaps the routing table atomically and restarts health checks.
 func (s *Server) Reload(rs []*model.Route) {
+	if s.cancelHC != nil {
+		s.cancelHC()
+	}
+	hcCtx, cancel := context.WithCancel(context.Background())
+	s.cancelHC = cancel
+
 	entries := make([]routeEntry, 0, len(rs))
 	for _, r := range rs {
 		if r.Path == "" {
@@ -83,21 +116,62 @@ func (s *Server) Reload(rs []*model.Route) {
 			prefix:      r.Path,
 			stripPrefix: r.StripPrefix,
 			redirect:    strings.TrimSpace(r.Redirect),
+			staticDir:   strings.TrimSpace(r.StaticDir),
 		}
-		if e.redirect == "" {
-			if r.TargetPort == 0 {
+
+		var inner http.Handler
+		switch {
+		case e.redirect != "":
+			redir := e.redirect
+			inner = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				http.Redirect(w, req, redir, http.StatusPermanentRedirect)
+			})
+		case e.staticDir != "":
+			fs := http.FileServer(http.Dir(e.staticDir))
+			if r.StripPrefix && r.Path != "/" {
+				inner = http.StripPrefix(r.Path, fs)
+			} else {
+				inner = fs
+			}
+		default:
+			ups := r.Upstreams
+			if len(ups) == 0 && r.TargetPort > 0 {
+				ups = []string{fmt.Sprintf("127.0.0.1:%d", r.TargetPort)}
+			}
+			if len(ups) == 0 {
 				continue
 			}
-			u, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", r.TargetPort))
-			if err != nil {
-				continue
+			pool := newUpstreamPool(ups, r.Path, r.StripPrefix)
+			pool.startHealthChecks(hcCtx, r.HealthPath, 5*time.Second)
+			e.pool = pool
+			if len(pool.all) > 0 {
+				e.target = pool.all[0].url
 			}
-			e.target = u
-			e.proxy = newReverseProxy(u, r.Path, r.StripPrefix)
+			inner = pool
 		}
+
+		// Stack middleware (applied innermost-out).
+		var mws []func(http.Handler) http.Handler
+		if len(r.CORSOrigins) > 0 {
+			mws = append(mws, corsMW(r.CORSOrigins))
+		}
+		if len(r.AllowCIDRs) > 0 {
+			mws = append(mws, allowCIDRMW(r.AllowCIDRs))
+		}
+		if r.BasicAuth != "" {
+			mws = append(mws, basicAuthMW(r.BasicAuth))
+		}
+		if r.RateLimitPerSec > 0 {
+			mws = append(mws, rateLimitMW(r.RateLimitPerSec))
+		}
+		if r.Gzip {
+			mws = append(mws, gzipMW)
+		}
+		e.handler = chain(inner, mws...)
+
 		entries = append(entries, e)
 	}
-	// Longest-prefix wins.
+
 	sort.Slice(entries, func(i, j int) bool {
 		return len(entries[i].prefix) > len(entries[j].prefix)
 	})
@@ -106,22 +180,19 @@ func (s *Server) Reload(rs []*model.Route) {
 	s.mu.Unlock()
 }
 
+// newReverseProxy is shared by upstream.go.
 func newReverseProxy(target *url.URL, prefix string, strip bool) *httputil.ReverseProxy {
 	rp := httputil.NewSingleHostReverseProxy(target)
 	orig := rp.Director
 	rp.Director = func(req *http.Request) {
-		// Snapshot client info BEFORE upstream rewriting.
 		clientIP, _, _ := net.SplitHostPort(req.RemoteAddr)
 		scheme := "http"
 		if req.TLS != nil {
 			scheme = "https"
 		}
 		origHost := req.Host
-
 		orig(req)
 		req.Host = target.Host
-
-		// Path rewrite (nginx: rewrite ^/api/(.*)$ /$1 break).
 		if strip && prefix != "/" {
 			p := strings.TrimPrefix(req.URL.Path, prefix)
 			if p == "" {
@@ -129,8 +200,6 @@ func newReverseProxy(target *url.URL, prefix string, strip bool) *httputil.Rever
 			}
 			req.URL.Path = p
 		}
-
-		// nginx-style forwarded headers.
 		if clientIP != "" {
 			if prior := req.Header.Get("X-Forwarded-For"); prior != "" {
 				req.Header.Set("X-Forwarded-For", prior+", "+clientIP)
@@ -146,12 +215,11 @@ func newReverseProxy(target *url.URL, prefix string, strip bool) *httputil.Rever
 		renderErrorPage(w, http.StatusBadGateway, "bad gateway",
 			req.URL.Path, target.String(), err.Error())
 	}
-	// Generous timeouts for long-lived streams (HMR, websockets, SSE).
 	rp.FlushInterval = 100 * time.Millisecond
 	return rp
 }
 
-// ServeHTTP performs the routing.
+// ServeHTTP routes the request and writes the response.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.hits.Add(1)
 	s.mu.RLock()
@@ -165,14 +233,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if !pathMatches(r.URL.Path, e.prefix) {
 			continue
 		}
-		if e.redirect != "" {
-			http.Redirect(w, r, e.redirect, http.StatusPermanentRedirect)
-			return
-		}
-		e.proxy.ServeHTTP(w, r)
+		e.handler.ServeHTTP(w, r)
 		return
 	}
-	s.writeIndex(w, r, routes)
+	renderIndex(w, r.Host, r.URL.Path, routes)
 }
 
 func pathMatches(p, prefix string) bool {
@@ -182,25 +246,62 @@ func pathMatches(p, prefix string) bool {
 	return p == prefix || strings.HasPrefix(p, prefix+"/")
 }
 
-func (s *Server) writeIndex(w http.ResponseWriter, r *http.Request, routes []routeEntry) {
-	renderIndex(w, r.Host, r.URL.Path, routes)
-}
-
-// Start binds and serves.
+// Start binds and serves with optional TLS + access logging.
 func (s *Server) Start() error {
-	s.srv = &http.Server{
-		Addr:              s.addr,
-		Handler:           s,
-		ReadHeaderTimeout: 10 * time.Second,
+	ln, err := net.Listen("tcp", s.addr)
+	if err != nil {
+		return err
 	}
-	return s.srv.ListenAndServe()
+	return s.Serve(ln)
 }
 
-// Serve uses an already-bound listener (so the caller can validate binding
-// before the UI starts and can fall back to a different port).
+// Serve uses an already-bound listener.
 func (s *Server) Serve(ln net.Listener) error {
+	handler := http.Handler(s)
+
+	if s.cfg != nil && s.cfg.AccessLog != "" {
+		fh, err := openAccessLog(s.cfg.AccessLog)
+		if err == nil {
+			s.accessFh = fh
+			handler = accessLogMW(io.MultiWriter(fh))(handler)
+		}
+	}
+
+	if s.cfg != nil && s.cfg.TLSEnabled && len(s.cfg.TLSDomains) > 0 {
+		certDir := s.cfg.TLSCertDir
+		if certDir == "" {
+			home, _ := os.UserHomeDir()
+			certDir = filepath.Join(home, ".ring0", "certs")
+		}
+		_ = os.MkdirAll(certDir, 0o700)
+		mgr := &autocert.Manager{
+			Cache:      autocert.DirCache(certDir),
+			Prompt:     autocert.AcceptTOS,
+			HostPolicy: autocert.HostWhitelist(s.cfg.TLSDomains...),
+			Email:      s.cfg.TLSEmail,
+		}
+		// HTTP listener: ACME-01 challenges + redirect everything else to HTTPS.
+		go func() {
+			httpSrv := &http.Server{
+				Handler: mgr.HTTPHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					http.Redirect(w, r, "https://"+r.Host+r.URL.RequestURI(), http.StatusMovedPermanently)
+				})),
+				ReadHeaderTimeout: 10 * time.Second,
+			}
+			_ = httpSrv.Serve(ln)
+		}()
+		// HTTPS listener: :443
+		s.srv = &http.Server{
+			Addr:              ":443",
+			Handler:           handler,
+			ReadHeaderTimeout: 10 * time.Second,
+			TLSConfig:         mgr.TLSConfig(), // negotiates HTTP/2
+		}
+		return s.srv.ListenAndServeTLS("", "")
+	}
+
 	s.srv = &http.Server{
-		Handler:           s,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	return s.srv.Serve(ln)
@@ -208,10 +309,26 @@ func (s *Server) Serve(ln net.Listener) error {
 
 // Stop shuts the listener down gracefully.
 func (s *Server) Stop() {
+	if s.cancelHC != nil {
+		s.cancelHC()
+	}
+	if s.accessFh != nil {
+		_ = s.accessFh.Close()
+	}
 	if s.srv == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	_ = s.srv.Shutdown(ctx)
+}
+
+// openAccessLog handles ~ expansion and append.
+func openAccessLog(path string) (*os.File, error) {
+	if strings.HasPrefix(path, "~/") {
+		home, _ := os.UserHomeDir()
+		path = filepath.Join(home, path[2:])
+	}
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	return os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 }

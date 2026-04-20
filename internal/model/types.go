@@ -35,13 +35,50 @@ const (
 	Private Visibility = "private"
 )
 
-// Route maps an inbound path/host to a target port (or to a redirect URL).
+// Route maps an inbound path/host to a target port, static dir, or redirect URL.
+//
+// Resolution order (first non-zero wins): Redirect → StaticDir → Upstreams.
+// All routes can layer middleware: Gzip, BasicAuth, AllowCIDRs, RateLimitPerSec, CORSOrigins.
 type Route struct {
-	ID          string     `json:"id"`
-	Path        string     `json:"path"` // e.g. "/api"
-	Host        string     `json:"host"` // optional, e.g. "api.local"
-	TargetPort  int        `json:"target_port"`
-	Visibility  Visibility `json:"visibility"`
-	StripPrefix bool       `json:"strip_prefix"` // strip Path before forwarding
-	Redirect    string     `json:"redirect"`     // if non-empty, send 308 to this URL (overrides proxy)
+	ID         string     `json:"id"`
+	Path       string     `json:"path"` // e.g. "/api"
+	Host       string     `json:"host"` // optional, e.g. "api.local"
+	TargetPort int        `json:"target_port"`
+	Visibility Visibility `json:"visibility"`
+
+	// Path rewriting / redirects
+	StripPrefix bool   `json:"strip_prefix"`
+	Redirect    string `json:"redirect"` // 308
+
+	// Static file serving — if set, request is served from disk (no proxy).
+	StaticDir string `json:"static_dir,omitempty"` // e.g. "/var/www/html"
+
+	// Load balancing — if set, overrides TargetPort. Round-robin across these.
+	// Form: ["127.0.0.1:3001", "127.0.0.1:3002"] or full URLs.
+	Upstreams []string `json:"upstreams,omitempty"`
+
+	// Health checks — if set, ring0 polls "<upstream>/HealthPath" every 5s
+	// and removes unhealthy upstreams from rotation. Empty = no health check.
+	HealthPath string `json:"health_path,omitempty"` // e.g. "/healthz"
+
+	// Middleware
+	Gzip            bool     `json:"gzip,omitempty"`
+	BasicAuth       string   `json:"basic_auth,omitempty"`        // "user:password" (plaintext for now; comma-separate multi)
+	AllowCIDRs      []string `json:"allow_cidrs,omitempty"`       // ["10.0.0.0/8", "1.2.3.4/32"]
+	RateLimitPerSec int      `json:"rate_limit_per_sec,omitempty"` // tokens/sec per client IP; 0 = off
+	CORSOrigins     []string `json:"cors_origins,omitempty"`       // ["*"] or ["https://app.example.com"]
+}
+
+// ServerConfig holds proxy-server-level settings persisted in state.json.
+type ServerConfig struct {
+	// TLS via Let's Encrypt (autocert). When Domains is non-empty, ring0
+	// listens on :443 and serves auto-renewed certs. HTTP listener (default
+	// :80 or --proxy) does ACME challenges + redirects to HTTPS.
+	TLSEnabled bool     `json:"tls_enabled,omitempty"`
+	TLSEmail   string   `json:"tls_email,omitempty"`   // contact for ACME
+	TLSDomains []string `json:"tls_domains,omitempty"` // ["example.com", "www.example.com"]
+	TLSCertDir string   `json:"tls_cert_dir,omitempty"` // default: ~/.ring0/certs
+
+	// Access log file path. Empty = no access log file (still in TUI).
+	AccessLog string `json:"access_log,omitempty"` // e.g. "~/.ring0/access.log"
 }

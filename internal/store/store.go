@@ -15,9 +15,10 @@ import (
 type Store struct {
 	mu     sync.RWMutex
 	path   string
-	Apps   []*model.App   `json:"apps"`
-	Routes []*model.Route `json:"routes"`
-	Pet    string         `json:"pet"` // selected pet species id
+	Apps   []*model.App        `json:"apps"`
+	Routes []*model.Route      `json:"routes"`
+	Pet    string              `json:"pet"`              // selected pet species id
+	Server *model.ServerConfig `json:"server,omitempty"` // proxy-server-level config
 }
 
 func defaultPath() string {

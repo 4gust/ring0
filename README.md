@@ -205,12 +205,146 @@ The System Monitor panel (`3`) shows `proxy: :8080   hits: N` so you can confirm
 
 ### What ring0 does **not** do (yet)
 
-- TLS termination → run behind Caddy or use Cloudflare in front
-- Rate limiting / WAF
-- gRPC-specific framing
-- Caching
+- HTTP/3 (QUIC) — needs heavy quic-go dep
+- Brotli compression — needs cgo
+- Response caching — easy to do wrong; defer to Caddy/CDN
 
-If you need any of those, point Caddy at `ring0 --proxy :8080` for TLS + add ring0's per-app routing on top.
+Everything else nginx does is in. See **Power features** below.
+
+## Power features (state.json schema)
+
+Most advanced settings live in `~/.ring0/state.json`. Edit that file (ring0 reloads on next launch — or after route add/edit/delete from the UI). Every field is optional.
+
+### Full route schema
+
+```jsonc
+{
+  "id": "rt-abc",
+  "path": "/api",
+  "host": "api.example.com",          // optional virtual host
+  "target_port": 3001,                 // simple single-upstream
+  "visibility": "public",
+  "strip_prefix": true,                // strip "/api" before forwarding
+  "redirect": "",                      // if set, sends 308 to this URL
+
+  // Static file serving (no proxy)
+  "static_dir": "/var/www/html",       // serves files from disk
+
+  // Load balancing (overrides target_port)
+  "upstreams": ["127.0.0.1:3001", "127.0.0.1:3002"],
+  "health_path": "/healthz",           // poll every 5s; remove failing upstreams
+
+  // Middleware
+  "gzip": true,
+  "basic_auth": "alice:s3cret,bob:hunter2",
+  "allow_cidrs": ["10.0.0.0/8", "1.2.3.4/32"],
+  "rate_limit_per_sec": 10,            // per-client-IP token bucket
+  "cors_origins": ["*"]                // or ["https://app.example.com"]
+}
+```
+
+### Server-level config
+
+Add to top of `~/.ring0/state.json`:
+
+```jsonc
+{
+  "apps": [...],
+  "routes": [...],
+  "server": {
+    "tls_enabled": true,
+    "tls_email": "you@example.com",
+    "tls_domains": ["example.com", "www.example.com"],
+    "tls_cert_dir": "~/.ring0/certs",   // optional
+    "access_log": "~/.ring0/access.log" // optional
+  }
+}
+```
+
+### Feature reference
+
+#### TLS / HTTPS / HTTP/2
+
+Enable `server.tls_enabled` with `tls_domains` pointed at your real DNS.
+ring0 listens on **:443** for TLS (with auto HTTP/2 negotiation) and uses
+your `--proxy` port for ACME challenges + an HTTP→HTTPS 301 redirect.
+
+```bash
+sudo setcap 'cap_net_bind_service=+ep' "$(which ring0)"   # one time
+ring0 --proxy :80                                          # serves :80 + :443
+```
+
+Certs auto-renew. They live in `~/.ring0/certs` by default.
+
+#### Static file serving
+
+Set `static_dir` on a route. The route serves files from that directory
+instead of proxying. Combine with `strip_prefix` to map `/v8/*` to a build:
+
+```jsonc
+{ "path": "/v8", "static_dir": "/var/www/v8-build", "strip_prefix": true }
+```
+
+#### Load balancing
+
+Set `upstreams` to a list. Round-robin distribution. With `health_path` set,
+ring0 polls each upstream every 5s and removes failing ones from rotation.
+The Routes panel shows `✓host:port` / `✗host:port` per upstream.
+
+```jsonc
+{
+  "path": "/",
+  "upstreams": ["10.0.0.1:8080", "10.0.0.2:8080", "10.0.0.3:8080"],
+  "health_path": "/healthz"
+}
+```
+
+#### gzip
+
+`"gzip": true` — only fires when the client sends `Accept-Encoding: gzip`.
+Adds `Content-Encoding: gzip` and `Vary: Accept-Encoding`.
+
+#### Basic auth
+
+`"basic_auth": "user:password"` — multiple users with comma:
+`"basic_auth": "alice:s3cret,bob:hunter2"`. Failed auth shows the anime
+401 page with a `WWW-Authenticate` challenge.
+
+#### IP allow-list
+
+`"allow_cidrs": ["10.0.0.0/8", "192.168.1.0/24"]` — only listed CIDRs may
+hit the route. `X-Forwarded-For` is honored if you're behind another LB.
+Bare IPs auto-expand to `/32`.
+
+#### Rate limiting
+
+`"rate_limit_per_sec": 10` — per-client-IP token bucket (burst = 2× rate).
+Excess requests get the anime 429 page + `Retry-After: 1`.
+
+#### CORS
+
+`"cors_origins": ["*"]` or `["https://app.example.com", "https://other.com"]`.
+Sets `Access-Control-Allow-*` headers and short-circuits OPTIONS preflight
+with 204.
+
+#### Custom error pages
+
+Already on by default — Catppuccin pixel-art mascots for 401, 403, 404, 429,
+500, 502, 503. Includes path + upstream + detail. No config needed.
+
+#### Access logs to disk
+
+`"server.access_log": "~/.ring0/access.log"` — appends one line per request
+in a Combined-ish format:
+`2026-04-20T10:00:00Z 1.2.3.4 "GET /api/users HTTP/1.1" 200 1234 12ms "Mozilla/..."`
+
+### Restart vs hot-reload
+
+| Change | Reload mode |
+|---|---|
+| Add/edit/delete route in UI | Hot — no restart |
+| Edit route fields in `state.json` | Restart `ring0` |
+| Edit `server.*` (TLS, access_log) | Restart `ring0` |
 
 
 ## Layout

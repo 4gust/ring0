@@ -40,6 +40,8 @@ func main() {
 		}
 		if ln != nil {
 			px = proxy.New(bound)
+			px.SetConfig(st.Server)
+			px.Reload(st.ListRoutes())
 			go func() {
 				if err := px.Serve(ln); err != nil {
 					fmt.Fprintln(os.Stderr, "proxy:", err)
