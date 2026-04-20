@@ -656,10 +656,10 @@ func (m Model) View() string {
 		return "initializing…"
 	}
 
-	// Outer margin: 1 row top/bottom, 2 cols left/right.
-	const marginX, marginY = 2, 1
+	// Outer margin: 10 rows top, 1 row bottom, 2 cols left/right.
+	const marginX, marginTop, marginBottom = 2, 10, 1
 	ew := m.w - marginX*2
-	eh := m.h - marginY*2
+	eh := m.h - marginTop - marginBottom
 	if ew < 20 || eh < 10 {
 		// Terminal too small — render plain message.
 		return "ring0: terminal too small"
@@ -678,10 +678,10 @@ func (m Model) View() string {
 	colH := bodyH / 2
 	colHB := bodyH - colH
 
-	apps := m.renderPanel(PanelApps, leftW, colH, m.viewApps(leftW-4, colH-2))
-	routes := m.renderPanel(PanelRoutes, leftW, colHB, m.viewRoutes(leftW-4, colHB-2))
-	sysv := m.renderPanel(PanelSystem, rightW, colH, m.viewSystem(rightW-4, colH-2))
-	logs := m.renderPanel(PanelLogs, rightW, colHB, m.viewLogs(rightW-4, colHB-2))
+	apps := m.renderPanel(PanelApps, leftW, colH, m.viewApps(leftW-4, colH-3))
+	routes := m.renderPanel(PanelRoutes, leftW, colHB, m.viewRoutes(leftW-4, colHB-3))
+	sysv := m.renderPanel(PanelSystem, rightW, colH, m.viewSystem(rightW-4, colH-3))
+	logs := m.renderPanel(PanelLogs, rightW, colHB, m.viewLogs(rightW-4, colHB-3))
 
 	left := lipgloss.JoinVertical(lipgloss.Left, apps, routes)
 	right := lipgloss.JoinVertical(lipgloss.Left, sysv, logs)
@@ -695,8 +695,8 @@ func (m Model) View() string {
 		out = m.overlay(out, m.viewConfirm())
 	}
 
-	// Apply outer margin.
-	return lipgloss.NewStyle().Margin(marginY, marginX).Render(out)
+	// Apply outer margin: top, right, bottom, left.
+	return lipgloss.NewStyle().Margin(marginTop, marginX, marginBottom, marginX).Render(out)
 }
 
 // blink replaces letter-like eye chars with closed-eye equivalents.
@@ -811,7 +811,8 @@ func (m Model) renderPanel(p Panel, w, h int, body string) string {
 		titleColor = ColorBlue
 	}
 	title := lipgloss.NewStyle().Foreground(titleColor).Bold(true).Render(" " + p.Title() + " ")
-	inner := lipgloss.NewStyle().Width(w - 2).Height(h - 2).Render(body)
+	// Border takes 2 rows, title takes 1 row → inner gets h-3.
+	inner := lipgloss.NewStyle().Width(w - 2).Height(h - 3).Render(body)
 	return style.Width(w).Height(h).Render(lipgloss.JoinVertical(lipgloss.Left, title, inner))
 }
 
