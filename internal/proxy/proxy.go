@@ -143,9 +143,8 @@ func newReverseProxy(target *url.URL, prefix string, strip bool) *httputil.Rever
 		req.Header.Set("X-Forwarded-Host", origHost)
 	}
 	rp.ErrorHandler = func(w http.ResponseWriter, req *http.Request, err error) {
-		http.Error(w,
-			fmt.Sprintf("ring0 proxy: upstream %s unreachable (%v)", target, err),
-			http.StatusBadGateway)
+		renderErrorPage(w, http.StatusBadGateway, "bad gateway",
+			req.URL.Path, target.String(), err.Error())
 	}
 	// Generous timeouts for long-lived streams (HMR, websockets, SSE).
 	rp.FlushInterval = 100 * time.Millisecond
@@ -173,7 +172,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		e.proxy.ServeHTTP(w, r)
 		return
 	}
-	s.writeIndex(w, routes)
+	s.writeIndex(w, r, routes)
 }
 
 func pathMatches(p, prefix string) bool {
@@ -183,31 +182,8 @@ func pathMatches(p, prefix string) bool {
 	return p == prefix || strings.HasPrefix(p, prefix+"/")
 }
 
-func (s *Server) writeIndex(w http.ResponseWriter, routes []routeEntry) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusNotFound)
-	fmt.Fprintln(w, `<!doctype html><title>ring0</title><style>body{font:14px/1.4 ui-monospace,monospace;padding:2rem;color:#cdd6f4;background:#1e1e2e}code{color:#a6e3a1}</style>`)
-	fmt.Fprintln(w, `<h2>ring0 proxy</h2><p>No route matched. Configured routes:</p><ul>`)
-	if len(routes) == 0 {
-		fmt.Fprintln(w, `<li><em>(none)</em></li>`)
-	}
-	for _, e := range routes {
-		host := e.host
-		if host == "" {
-			host = "*"
-		}
-		dst := ""
-		if e.redirect != "" {
-			dst = "redirect → " + e.redirect
-		} else {
-			dst = e.target.String()
-			if e.stripPrefix {
-				dst += " (strip)"
-			}
-		}
-		fmt.Fprintf(w, `<li><code>%s%s</code> → %s</li>`, host, e.prefix, dst)
-	}
-	fmt.Fprintln(w, `</ul>`)
+func (s *Server) writeIndex(w http.ResponseWriter, r *http.Request, routes []routeEntry) {
+	renderIndex(w, r.Host, r.URL.Path, routes)
 }
 
 // Start binds and serves.
