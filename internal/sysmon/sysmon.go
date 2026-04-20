@@ -7,10 +7,10 @@ import (
 
 // Snapshot is a point-in-time system metrics reading.
 type Snapshot struct {
-	CPUPercent  float64
-	MemPercent  float64
-	MemUsedMB   uint64
-	MemTotalMB  uint64
+	CPUPercent float64
+	MemPercent float64
+	MemUsedMB  uint64
+	MemTotalMB uint64
 }
 
 // Sample returns current CPU + memory usage.

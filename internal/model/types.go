@@ -15,9 +15,9 @@ const (
 type App struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
-	Cmd       string    `json:"cmd"`        // shell command, e.g. "node server.js"
-	Cwd       string    `json:"cwd"`        // working directory
-	Port      int       `json:"port"`       // optional listening port
+	Cmd       string    `json:"cmd"`  // shell command, e.g. "node server.js"
+	Cwd       string    `json:"cwd"`  // working directory
+	Port      int       `json:"port"` // optional listening port
 	Status    Status    `json:"-"`
 	PID       int       `json:"-"`
 	StartedAt time.Time `json:"-"`
@@ -35,8 +35,8 @@ const (
 // Route maps an inbound path/host to a target port (logical only — no proxy here).
 type Route struct {
 	ID         string     `json:"id"`
-	Path       string     `json:"path"`        // e.g. "/api"
-	Host       string     `json:"host"`        // optional, e.g. "api.local"
+	Path       string     `json:"path"` // e.g. "/api"
+	Host       string     `json:"host"` // optional, e.g. "api.local"
 	TargetPort int        `json:"target_port"`
 	Visibility Visibility `json:"visibility"`
 }

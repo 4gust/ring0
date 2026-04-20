@@ -15,18 +15,95 @@ A modern terminal UI for managing local applications and routes — inspired by 
  ✔ added api                                  a:add  s:start ...
 ```
 
-## Install
+## Install & Run
 
-Requires Go 1.22+.
+### Requirements
+
+- **Go 1.22+** (`go version`)
+- A 256-color terminal — iTerm2, kitty, Alacritty, WezTerm, or modern Terminal.app / GNOME Terminal all work
+- Minimum terminal size: ~80×24 (larger is better)
+- macOS, Linux, or Windows
+
+### Option 1 — Install with `go install`
 
 ```bash
-git clone <this repo>
+go install github.com/4gust/ring0/cmd/ring0@latest
+ring0
+```
+
+This drops the `ring0` binary into `$(go env GOPATH)/bin`. Make sure that's on your `PATH`:
+
+```bash
+export PATH="$PATH:$(go env GOPATH)/bin"   # add to ~/.zshrc or ~/.bashrc
+```
+
+### Option 2 — Build from source
+
+```bash
+git clone https://github.com/4gust/ring0.git
 cd ring0
 go build -o ring0 ./cmd/ring0
 ./ring0
 ```
 
-State is persisted to `~/.ring0/state.json`.
+### Option 3 — Run without building
+
+```bash
+git clone https://github.com/4gust/ring0.git
+cd ring0
+go run ./cmd/ring0
+```
+
+### Install system-wide (optional)
+
+```bash
+sudo mv ring0 /usr/local/bin/
+ring0
+```
+
+### Verify it works
+
+When you launch `ring0` you should see four bordered panels (Applications, Routes, System Monitor, Logs) and a footer with context-sensitive keys. If colors look off, your terminal is probably not in 256-color/truecolor mode:
+
+```bash
+export COLORTERM=truecolor
+```
+
+### State & data
+
+- Config + state file: `~/.ring0/state.json` (created on first run)
+- Logs: in-memory ring buffer per app (last 2000 lines) — not persisted to disk
+
+To reset everything:
+
+```bash
+rm -rf ~/.ring0
+```
+
+### Updating
+
+```bash
+go install github.com/4gust/ring0/cmd/ring0@latest
+# or, if you cloned:
+cd ring0 && git pull && go build -o ring0 ./cmd/ring0
+```
+
+### Uninstall
+
+```bash
+rm "$(go env GOPATH)/bin/ring0"   # or /usr/local/bin/ring0
+rm -rf ~/.ring0
+```
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `command not found: ring0` | Add `$(go env GOPATH)/bin` to `PATH` |
+| Garbled borders / wrong colors | Use a truecolor terminal; `export COLORTERM=truecolor` |
+| App stuck in `crashed` | Check logs panel (`l`) for the exit message |
+| `port already in use` toast | Pick a different port or stop the conflicting app |
+| State seems wrong | `rm -rf ~/.ring0` to start fresh |
 
 ## Layout
 

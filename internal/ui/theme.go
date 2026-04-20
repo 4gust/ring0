@@ -58,10 +58,10 @@ var (
 			Foreground(mochaBase).
 			Bold(true)
 
-	StyleDim     = lipgloss.NewStyle().Foreground(ColorGray)
-	StyleOK      = lipgloss.NewStyle().Foreground(ColorGreen)
-	StyleWarn    = lipgloss.NewStyle().Foreground(ColorYellow)
-	StyleErr     = lipgloss.NewStyle().Foreground(ColorRed)
+	StyleDim      = lipgloss.NewStyle().Foreground(ColorGray)
+	StyleOK       = lipgloss.NewStyle().Foreground(ColorGreen)
+	StyleWarn     = lipgloss.NewStyle().Foreground(ColorYellow)
+	StyleErr      = lipgloss.NewStyle().Foreground(ColorRed)
 	StyleBadgePub = lipgloss.NewStyle().
 			Foreground(mochaBase).
 			Background(ColorGreen).

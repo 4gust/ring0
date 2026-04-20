@@ -45,7 +45,7 @@ type Mode int
 const (
 	ModeNormal Mode = iota
 	ModeSearch
-	ModeForm   // adding/editing
+	ModeForm // adding/editing
 	ModeConfirm
 )
 
@@ -78,10 +78,10 @@ type Model struct {
 	store *store.Store
 	pm    *proc.Manager
 
-	w, h     int
-	active   Panel
-	mode     Mode
-	toast    toast
+	w, h   int
+	active Panel
+	mode   Mode
+	toast  toast
 
 	// per-panel cursor
 	appCursor   int
@@ -104,9 +104,9 @@ type Model struct {
 	confirmFn   func() tea.Cmd
 
 	// system + logs
-	sys      sysmon.Snapshot
-	cpuHist  []float64
-	memHist  []float64
+	sys     sysmon.Snapshot
+	cpuHist []float64
+	memHist []float64
 }
 
 // ----- messages -----

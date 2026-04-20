@@ -51,7 +51,7 @@ func NewManager() *Manager {
 	}
 }
 
-func (m *Manager) Logs() <-chan LogLine        { return m.logCh }
+func (m *Manager) Logs() <-chan LogLine             { return m.logCh }
 func (m *Manager) StatusEvents() <-chan StatusEvent { return m.statusCh }
 
 // Buffer returns the ring buffer for an app (creating if needed).
