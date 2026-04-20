@@ -84,6 +84,9 @@ func (m *Manager) Start(a *model.App) error {
 	if a.Cwd != "" {
 		cmd.Dir = a.Cwd
 	}
+	// Put each child in its own process group so a signal to ring0
+	// (or a sibling app crashing) does not cascade to every app.
+	setPgid(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -140,11 +143,13 @@ func (m *Manager) Stop(a *model.App) error {
 		return fmt.Errorf("not running")
 	}
 	if mp.cmd.Process != nil {
-		_ = mp.cmd.Process.Signal(syscall.SIGTERM)
+		// Signal the whole process group so the real child (node/python/...)
+		// dies, not just the /bin/sh wrapper.
+		signalGroup(mp.cmd, syscall.SIGTERM)
 		go func(p *exec.Cmd) {
 			time.Sleep(3 * time.Second)
 			if p.ProcessState == nil || !p.ProcessState.Exited() {
-				_ = p.Process.Kill()
+				signalGroup(p, syscall.SIGKILL)
 			}
 		}(mp.cmd)
 	}
