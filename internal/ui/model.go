@@ -9,10 +9,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/nileshchoudhary/ring0/internal/model"
-	"github.com/nileshchoudhary/ring0/internal/proc"
-	"github.com/nileshchoudhary/ring0/internal/store"
-	"github.com/nileshchoudhary/ring0/internal/sysmon"
+	"github.com/4gust/ring0/internal/model"
+	"github.com/4gust/ring0/internal/proc"
+	"github.com/4gust/ring0/internal/store"
+	"github.com/4gust/ring0/internal/sysmon"
 )
 
 // Panel identifiers (tab order).

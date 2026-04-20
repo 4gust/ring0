@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nileshchoudhary/ring0/internal/model"
+	"github.com/4gust/ring0/internal/model"
 )
 
 // Store persists apps + routes to a JSON file under ~/.ring0/state.json.

@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/nileshchoudhary/ring0/internal/model"
+	"github.com/4gust/ring0/internal/model"
 )
 
 // LogLine is one line of output from a managed app.

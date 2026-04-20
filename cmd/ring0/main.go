@@ -6,9 +6,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/nileshchoudhary/ring0/internal/proc"
-	"github.com/nileshchoudhary/ring0/internal/store"
-	"github.com/nileshchoudhary/ring0/internal/ui"
+	"github.com/4gust/ring0/internal/proc"
+	"github.com/4gust/ring0/internal/store"
+	"github.com/4gust/ring0/internal/ui"
 )
 
 func main() {

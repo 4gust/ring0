@@ -1,4 +1,4 @@
-module github.com/nileshchoudhary/ring0
+module github.com/4gust/ring0
 
 go 1.24.2
 
