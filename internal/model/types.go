@@ -15,9 +15,12 @@ const (
 type App struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
-	Cmd       string    `json:"cmd"`  // shell command, e.g. "node server.js"
-	Cwd       string    `json:"cwd"`  // working directory
-	Port      int       `json:"port"` // optional listening port
+	Cmd       string    `json:"cmd"`    // run command, e.g. "node server.js"
+	Setup     string    `json:"setup"`  // optional one-shot setup, e.g. "npm install"
+	Repo      string    `json:"repo"`   // optional git URL; pulled/cloned on update
+	Branch    string    `json:"branch"` // optional git branch (default: main)
+	Cwd       string    `json:"cwd"`    // working directory
+	Port      int       `json:"port"`   // optional listening port
 	Status    Status    `json:"-"`
 	PID       int       `json:"-"`
 	StartedAt time.Time `json:"-"`

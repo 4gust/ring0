@@ -107,11 +107,15 @@ type Model struct {
 	sys     sysmon.Snapshot
 	cpuHist []float64
 	memHist []float64
+
+	// animation
+	frame int
 }
 
 // ----- messages -----
 
 type tickMsg time.Time
+type animMsg struct{}
 type sysMsg sysmon.Snapshot
 type logMsg proc.LogLine
 type statusMsg proc.StatusEvent
@@ -119,6 +123,10 @@ type toastClearMsg struct{}
 
 func tickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
+}
+
+func animCmd() tea.Cmd {
+	return tea.Tick(200*time.Millisecond, func(time.Time) tea.Msg { return animMsg{} })
 }
 
 func sysCmd() tea.Cmd {
@@ -150,7 +158,7 @@ func New(s *store.Store, pm *proc.Manager) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(tickCmd(), sysCmd(), waitLog(m.pm.Logs()), waitStatus(m.pm.StatusEvents()))
+	return tea.Batch(tickCmd(), animCmd(), sysCmd(), waitLog(m.pm.Logs()), waitStatus(m.pm.StatusEvents()))
 }
 
 // ---------------- Update ----------------
@@ -168,6 +176,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toast = toast{}
 		}
 		return m, tea.Batch(tickCmd(), sysCmd())
+
+	case animMsg:
+		m.frame++
+		return m, animCmd()
 
 	case sysMsg:
 		m.sys = sysmon.Snapshot(msg)
@@ -325,9 +337,11 @@ func (m Model) keyApps(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "s":
 		if a := m.currentApp(); a != nil {
-			if err := m.pm.Start(a); err != nil {
-				m.flash(toastErr, "✖ "+err.Error())
-			}
+			m.pm.UpdateAndStart(a)
+			m.active = PanelLogs
+			m.logFollow = true
+			m.logScroll = 0
+			m.flash(toastInfo, "▶ starting "+a.Name+"…")
 		}
 		return m, nil
 	case "x":
@@ -339,9 +353,11 @@ func (m Model) keyApps(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "r":
 		if a := m.currentApp(); a != nil {
-			if err := m.pm.Restart(a); err != nil {
-				m.flash(toastErr, "✖ "+err.Error())
-			}
+			m.pm.UpdateAndStart(a)
+			m.active = PanelLogs
+			m.logFollow = true
+			m.logScroll = 0
+			m.flash(toastInfo, "↻ restarting "+a.Name+"…")
 		}
 		return m, nil
 	case "l":
@@ -459,10 +475,12 @@ func (m *Model) openAppForm() {
 	m.form = formAddApp
 	m.inputIdx = 0
 	m.inputs = []textinput.Model{
-		newInput("Name", "my-api"),
-		newInput("Cmd ", "node server.js"),
-		newInput("Cwd ", "/path/to/dir (optional)"),
-		newInput("Port", "3000 (optional)"),
+		newInput("Name ", "my-api"),
+		newInput("Cmd  ", "node server.js"),
+		newInput("Cwd  ", "/path/to/dir (optional)"),
+		newInput("Setup", "npm install (optional)"),
+		newInput("Repo ", "git@github.com:org/app.git (optional)"),
+		newInput("Port ", "3000 (optional)"),
 	}
 	m.inputs[0].Focus()
 }
@@ -529,12 +547,14 @@ func (m Model) submitForm() (tea.Model, tea.Cmd) {
 	switch m.form {
 	case formAddApp:
 		port := 0
-		fmt.Sscanf(strings.TrimSpace(m.inputs[3].Value()), "%d", &port)
+		fmt.Sscanf(strings.TrimSpace(m.inputs[5].Value()), "%d", &port)
 		a := &model.App{
-			Name: strings.TrimSpace(m.inputs[0].Value()),
-			Cmd:  strings.TrimSpace(m.inputs[1].Value()),
-			Cwd:  strings.TrimSpace(m.inputs[2].Value()),
-			Port: port,
+			Name:  strings.TrimSpace(m.inputs[0].Value()),
+			Cmd:   strings.TrimSpace(m.inputs[1].Value()),
+			Cwd:   strings.TrimSpace(m.inputs[2].Value()),
+			Setup: strings.TrimSpace(m.inputs[3].Value()),
+			Repo:  strings.TrimSpace(m.inputs[4].Value()),
+			Port:  port,
 		}
 		if err := m.store.AddApp(a); err != nil {
 			m.flash(toastErr, "✖ "+err.Error())
@@ -631,17 +651,26 @@ func (m Model) View() string {
 		return "initializing…"
 	}
 
-	header := m.renderHeader()
-	footer := m.renderFooter()
+	// Outer margin: 1 row top/bottom, 2 cols left/right.
+	const marginX, marginY = 2, 1
+	ew := m.w - marginX*2
+	eh := m.h - marginY*2
+	if ew < 20 || eh < 10 {
+		// Terminal too small — render plain message.
+		return "ring0: terminal too small"
+	}
 
-	bodyH := m.h - lipgloss.Height(header) - lipgloss.Height(footer)
+	header := m.renderHeader(ew)
+	footer := m.renderFooter(ew)
+	cat := m.renderCat(ew)
+
+	bodyH := eh - lipgloss.Height(header) - lipgloss.Height(footer) - lipgloss.Height(cat)
 	if bodyH < 6 {
 		bodyH = 6
 	}
 
-	// Layout: left column (Apps over Routes) | right column (System over Logs)
-	leftW := m.w / 2
-	rightW := m.w - leftW
+	leftW := ew / 2
+	rightW := ew - leftW
 	colH := bodyH / 2
 	colHB := bodyH - colH
 
@@ -654,17 +683,136 @@ func (m Model) View() string {
 	right := lipgloss.JoinVertical(lipgloss.Left, sysv, logs)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 
-	out := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+	out := lipgloss.JoinVertical(lipgloss.Left, header, body, footer, cat)
 
 	if m.mode == ModeForm {
 		out = m.overlay(out, m.viewForm())
 	} else if m.mode == ModeConfirm {
 		out = m.overlay(out, m.viewConfirm())
 	}
-	return out
+
+	// Apply outer margin.
+	return lipgloss.NewStyle().Margin(marginY, marginX).Render(out)
 }
 
-func (m Model) renderHeader() string {
+// renderCat draws a 3-row Tamagotchi-style virtual pet that reacts to app
+// state: sleeps when nothing is running, purrs when apps are healthy, and
+// looks alarmed when anything has crashed. Blinks every few ticks.
+func (m Model) renderCat(width int) string {
+	mood, label, labelColor := m.petMood()
+
+	var frame []string
+	switch mood {
+	case "alert":
+		frame = []string{
+			` /\_/\ `,
+			`( O_O )`,
+			` >!^!< `,
+		}
+	case "sleep":
+		// Breathing: ears droop every other frame.
+		if m.frame%4 < 2 {
+			frame = []string{
+				` /\_/\   z`,
+				`( -.- )  Z`,
+				` > - <  z `,
+			}
+		} else {
+			frame = []string{
+				` /\_/\  z `,
+				`( =.= ) Z `,
+				` > _ <   z`,
+			}
+		}
+	default: // happy
+		// Blink every 5 frames, wag tail alternately.
+		eyes := "( o.o )"
+		tail := " > ^ < ~"
+		if m.frame%5 == 0 {
+			eyes = "( -.- )"
+		}
+		if m.frame%2 == 0 {
+			tail = " > ^ < ~"
+		} else {
+			tail = " > ^ <  ~"
+		}
+		frame = []string{
+			` /\_/\ `,
+			eyes,
+			tail,
+		}
+	}
+
+	// Stats line (age = uptime-ish ticks, hearts from healthy apps).
+	apps := m.store.ListApps()
+	running := 0
+	crashed := 0
+	for _, a := range apps {
+		if a.Status == model.StatusRunning {
+			running++
+		}
+		if a.Status == model.StatusCrashed {
+			crashed++
+		}
+	}
+	hearts := strings.Repeat("♥ ", running)
+	if hearts == "" {
+		hearts = lipgloss.NewStyle().Foreground(ColorDim).Render("· · ·")
+	} else {
+		hearts = lipgloss.NewStyle().Foreground(ColorRed).Render(strings.TrimSpace(hearts))
+	}
+	skulls := ""
+	if crashed > 0 {
+		skulls = " " + lipgloss.NewStyle().Foreground(ColorRed).Render(strings.Repeat("☠ ", crashed))
+	}
+
+	name := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render("ring0-chan")
+	moodTxt := lipgloss.NewStyle().Foreground(labelColor).Render(label)
+	stats := fmt.Sprintf("%s  %s  %s%s", name, moodTxt, hearts, skulls)
+
+	catStyle := lipgloss.NewStyle().Foreground(ColorAccent)
+	catBlock := lipgloss.JoinVertical(lipgloss.Left,
+		catStyle.Render(frame[0]),
+		catStyle.Render(frame[1]),
+		catStyle.Render(frame[2]),
+	)
+
+	// Stats centered vertically next to the pet.
+	statsBlock := lipgloss.NewStyle().PaddingLeft(2).Render("\n" + stats + "\n")
+
+	row := lipgloss.JoinHorizontal(lipgloss.Top, catBlock, statsBlock)
+	// Right-align within width so the pet sits at the bottom-right.
+	rowW := lipgloss.Width(row)
+	if rowW >= width {
+		return row
+	}
+	return strings.Repeat(" ", width-rowW) + row
+}
+
+// petMood derives the pet's state from app statuses.
+func (m Model) petMood() (mood, label string, color lipgloss.Color) {
+	apps := m.store.ListApps()
+	anyRunning := false
+	anyCrashed := false
+	for _, a := range apps {
+		if a.Status == model.StatusRunning {
+			anyRunning = true
+		}
+		if a.Status == model.StatusCrashed {
+			anyCrashed = true
+		}
+	}
+	switch {
+	case anyCrashed:
+		return "alert", "yikes!", ColorRed
+	case anyRunning:
+		return "happy", "purring", ColorGreen
+	default:
+		return "sleep", "napping", ColorGray
+	}
+}
+
+func (m Model) renderHeader(width int) string {
 	title := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(" ring0 ")
 	tabs := []string{}
 	for i := PanelApps; i <= PanelLogs; i++ {
@@ -676,14 +824,14 @@ func (m Model) renderHeader() string {
 	}
 	right := lipgloss.NewStyle().Foreground(ColorGray).Render(time.Now().Format("15:04:05"))
 	bar := lipgloss.JoinHorizontal(lipgloss.Top, title, strings.Join(tabs, " "))
-	pad := m.w - lipgloss.Width(bar) - lipgloss.Width(right)
+	pad := width - lipgloss.Width(bar) - lipgloss.Width(right)
 	if pad < 1 {
 		pad = 1
 	}
 	return bar + strings.Repeat(" ", pad) + right
 }
 
-func (m Model) renderFooter() string {
+func (m Model) renderFooter(width int) string {
 	keys := m.contextKeys()
 	help := lipgloss.NewStyle().Foreground(ColorGray).Render(keys)
 
@@ -705,7 +853,7 @@ func (m Model) renderFooter() string {
 	if t == "" {
 		t = StyleStatusBar.Render(" ready ")
 	}
-	pad := m.w - lipgloss.Width(t) - lipgloss.Width(help) - 2
+	pad := width - lipgloss.Width(t) - lipgloss.Width(help) - 2
 	if pad < 1 {
 		pad = 1
 	}

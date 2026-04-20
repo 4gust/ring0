@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"runtime"
 	"sync"
@@ -187,4 +188,122 @@ func (m *Manager) emitStatus(id string, st model.Status, pid, exit int) {
 	case m.statusCh <- StatusEvent{AppID: id, Status: st, PID: pid, ExitCode: exit}:
 	default:
 	}
+}
+
+// pushLog injects a synthetic line into the app's log buffer.
+func (m *Manager) pushLog(appID, text string, isErr bool) {
+	line := LogLine{AppID: appID, Time: time.Now(), Text: text, Err: isErr}
+	m.Buffer(appID).Push(line)
+	select {
+	case m.logCh <- line:
+	default:
+	}
+}
+
+// RunOneShot runs a shell command synchronously, streaming its output into
+// the app's log buffer. It does NOT touch the long-running process slot, so
+// it's safe to call alongside Start/Stop.
+func (m *Manager) RunOneShot(appID, cwd, cmdline string) error {
+	shell, flag := "/bin/sh", "-c"
+	if runtime.GOOS == "windows" {
+		shell, flag = "cmd", "/C"
+	}
+	m.pushLog(appID, "$ "+cmdline, false)
+	cmd := exec.Command(shell, flag, cmdline)
+	if cwd != "" {
+		cmd.Dir = cwd
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); m.pump(appID, stdout, false) }()
+	go func() { defer wg.Done(); m.pump(appID, stderr, true) }()
+	wg.Wait()
+	return cmd.Wait()
+}
+
+// UpdateAndStart runs the full pipeline asynchronously: git update → setup → start.
+// Each step streams into the app's log buffer. Errors are pushed as log lines and
+// abort the pipeline.
+func (m *Manager) UpdateAndStart(a *model.App) {
+	go func() {
+		if m.Running(a.ID) {
+			m.pushLog(a.ID, "stopping current process…", false)
+			_ = m.Stop(a)
+			for i := 0; i < 50 && m.Running(a.ID); i++ {
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+		// 1. fetch latest code
+		if a.Repo != "" || isGitDir(a.Cwd) {
+			if err := m.gitUpdate(a); err != nil {
+				m.pushLog(a.ID, "✖ git: "+err.Error(), true)
+				return
+			}
+		}
+		// 2. setup
+		if a.Setup != "" {
+			if err := m.RunOneShot(a.ID, a.Cwd, a.Setup); err != nil {
+				m.pushLog(a.ID, "✖ setup failed: "+err.Error(), true)
+				return
+			}
+		}
+		// 3. start
+		if err := m.Start(a); err != nil {
+			m.pushLog(a.ID, "✖ start failed: "+err.Error(), true)
+		}
+	}()
+}
+
+// RunSetup runs only the setup command (e.g. install deps), asynchronously.
+func (m *Manager) RunSetup(a *model.App) {
+	if a.Setup == "" {
+		m.pushLog(a.ID, "no setup command configured", true)
+		return
+	}
+	go func() {
+		if err := m.RunOneShot(a.ID, a.Cwd, a.Setup); err != nil {
+			m.pushLog(a.ID, "✖ setup failed: "+err.Error(), true)
+		} else {
+			m.pushLog(a.ID, "✔ setup complete", false)
+		}
+	}()
+}
+
+func (m *Manager) gitUpdate(a *model.App) error {
+	cwd := a.Cwd
+	if cwd == "" {
+		return fmt.Errorf("no cwd set")
+	}
+	branch := a.Branch
+	if branch == "" {
+		branch = "main"
+	}
+	if !isGitDir(cwd) {
+		if a.Repo == "" {
+			return fmt.Errorf("cwd is not a git repo and no repo URL set")
+		}
+		return m.RunOneShot(a.ID, "", fmt.Sprintf("git clone --branch %s %s %s", branch, a.Repo, cwd))
+	}
+	return m.RunOneShot(a.ID, cwd, "git pull --ff-only origin "+branch)
+}
+
+func isGitDir(path string) bool {
+	if path == "" {
+		return false
+	}
+	if fi, err := os.Stat(path + "/.git"); err == nil && fi != nil {
+		return true
+	}
+	return false
 }
