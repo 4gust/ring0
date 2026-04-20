@@ -357,8 +357,11 @@ func (m Model) keyApps(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "s":
 		if a := m.currentApp(); a != nil {
 			if m.pm.Running(a.ID) {
-				m.flash(toastInfo, "● "+a.Name+" is already running")
-			} else if err := m.pm.Start(a); err != nil {
+				// Silent no-op: avoid noisy "already running" toasts during
+				// the brief window between spawn and crash.
+				return m, nil
+			}
+			if err := m.pm.Start(a); err != nil {
 				m.flash(toastErr, "✖ "+err.Error())
 			} else {
 				m.flash(toastOK, "▶ started "+a.Name)
