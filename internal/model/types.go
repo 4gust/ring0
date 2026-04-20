@@ -63,8 +63,8 @@ type Route struct {
 
 	// Middleware
 	Gzip            bool     `json:"gzip,omitempty"`
-	BasicAuth       string   `json:"basic_auth,omitempty"`        // "user:password" (plaintext for now; comma-separate multi)
-	AllowCIDRs      []string `json:"allow_cidrs,omitempty"`       // ["10.0.0.0/8", "1.2.3.4/32"]
+	BasicAuth       string   `json:"basic_auth,omitempty"`         // "user:password" (plaintext for now; comma-separate multi)
+	AllowCIDRs      []string `json:"allow_cidrs,omitempty"`        // ["10.0.0.0/8", "1.2.3.4/32"]
 	RateLimitPerSec int      `json:"rate_limit_per_sec,omitempty"` // tokens/sec per client IP; 0 = off
 	CORSOrigins     []string `json:"cors_origins,omitempty"`       // ["*"] or ["https://app.example.com"]
 }
@@ -75,8 +75,8 @@ type ServerConfig struct {
 	// listens on :443 and serves auto-renewed certs. HTTP listener (default
 	// :80 or --proxy) does ACME challenges + redirects to HTTPS.
 	TLSEnabled bool     `json:"tls_enabled,omitempty"`
-	TLSEmail   string   `json:"tls_email,omitempty"`   // contact for ACME
-	TLSDomains []string `json:"tls_domains,omitempty"` // ["example.com", "www.example.com"]
+	TLSEmail   string   `json:"tls_email,omitempty"`    // contact for ACME
+	TLSDomains []string `json:"tls_domains,omitempty"`  // ["example.com", "www.example.com"]
 	TLSCertDir string   `json:"tls_cert_dir,omitempty"` // default: ~/.ring0/certs
 
 	// Access log file path. Empty = no access log file (still in TUI).

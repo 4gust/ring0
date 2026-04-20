@@ -13,9 +13,9 @@ import (
 
 // upstreamPool is a round-robin pool with health tracking.
 type upstreamPool struct {
-	mu      sync.RWMutex
-	all     []*upstream
-	idx     atomic.Uint64
+	mu  sync.RWMutex
+	all []*upstream
+	idx atomic.Uint64
 }
 
 type upstream struct {
