@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net"
 	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -14,8 +15,13 @@ import (
 )
 
 func main() {
-	addr := flag.String("proxy", os.Getenv("RING0_PROXY_ADDR"),
-		"reverse-proxy listen address, e.g. :8080 or 0.0.0.0:80 (env RING0_PROXY_ADDR). Empty disables.")
+	defaultAddr := os.Getenv("RING0_PROXY_ADDR")
+	if defaultAddr == "" {
+		defaultAddr = ":80"
+	}
+	addr := flag.String("proxy", defaultAddr,
+		"reverse-proxy listen address (default :80, falls back to :8080 if :80 needs root). "+
+			"Pass --proxy='' to disable. Env: RING0_PROXY_ADDR")
 	flag.Parse()
 
 	st, err := store.New()
@@ -27,12 +33,21 @@ func main() {
 
 	var px *proxy.Server
 	if *addr != "" {
-		px = proxy.New(*addr)
-		go func() {
-			if err := px.Start(); err != nil {
-				fmt.Fprintln(os.Stderr, "proxy:", err)
-			}
-		}()
+		ln, bound := tryListen(*addr)
+		if ln == nil && *addr == ":80" {
+			fmt.Fprintln(os.Stderr, "proxy: :80 unavailable (needs root or setcap), falling back to :8080")
+			ln, bound = tryListen(":8080")
+		}
+		if ln != nil {
+			px = proxy.New(bound)
+			go func() {
+				if err := px.Serve(ln); err != nil {
+					fmt.Fprintln(os.Stderr, "proxy:", err)
+				}
+			}()
+		} else {
+			fmt.Fprintln(os.Stderr, "proxy: could not bind", *addr, "— continuing without proxy")
+		}
 	}
 
 	p := tea.NewProgram(ui.New(st, pm, px), tea.WithAltScreen(), tea.WithMouseCellMotion())
@@ -43,4 +58,12 @@ func main() {
 	if px != nil {
 		px.Stop()
 	}
+}
+
+func tryListen(addr string) (net.Listener, string) {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, ""
+	}
+	return ln, ln.Addr().String()
 }

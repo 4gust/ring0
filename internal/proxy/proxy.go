@@ -220,6 +220,16 @@ func (s *Server) Start() error {
 	return s.srv.ListenAndServe()
 }
 
+// Serve uses an already-bound listener (so the caller can validate binding
+// before the UI starts and can fall back to a different port).
+func (s *Server) Serve(ln net.Listener) error {
+	s.srv = &http.Server{
+		Handler:           s,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	return s.srv.Serve(ln)
+}
+
 // Stop shuts the listener down gracefully.
 func (s *Server) Stop() {
 	if s.srv == nil {
