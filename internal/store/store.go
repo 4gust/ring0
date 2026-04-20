@@ -17,6 +17,7 @@ type Store struct {
 	path   string
 	Apps   []*model.App   `json:"apps"`
 	Routes []*model.Route `json:"routes"`
+	Pet    string         `json:"pet"` // selected pet species id
 }
 
 func defaultPath() string {

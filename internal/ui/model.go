@@ -264,6 +264,11 @@ func (m Model) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "pgdown":
 		m.moveCursor(10)
 		return m, nil
+	case "p":
+		m.store.Pet = NextPet(m.store.Pet)
+		_ = m.store.Save()
+		m.flash(toastInfo, "buddy: "+PetByID(m.store.Pet).Name)
+		return m, nil
 	}
 
 	// Context-aware actions per panel.
@@ -683,7 +688,7 @@ func (m Model) View() string {
 	right := lipgloss.JoinVertical(lipgloss.Left, sysv, logs)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 
-	out := lipgloss.JoinVertical(lipgloss.Left, header, body, footer, cat)
+	out := lipgloss.JoinVertical(lipgloss.Left, cat, header, body, footer)
 
 	if m.mode == ModeForm {
 		out = m.overlay(out, m.viewForm())
@@ -695,55 +700,30 @@ func (m Model) View() string {
 	return lipgloss.NewStyle().Margin(marginY, marginX).Render(out)
 }
 
-// renderCat draws a 3-row Tamagotchi-style virtual pet that reacts to app
-// state: sleeps when nothing is running, purrs when apps are healthy, and
-// looks alarmed when anything has crashed. Blinks every few ticks.
+// renderCat draws the selected Tamagotchi-style pet that reacts to app state.
 func (m Model) renderCat(width int) string {
+	pet := PetByID(m.store.Pet)
 	mood, label, labelColor := m.petMood()
 
-	var frame []string
+	var frame [3]string
 	switch mood {
 	case "alert":
-		frame = []string{
-			` /\_/\ `,
-			`( O_O )`,
-			` >!^!< `,
-		}
+		frame = pet.Alert
 	case "sleep":
-		// Breathing: ears droop every other frame.
-		if m.frame%4 < 2 {
-			frame = []string{
-				` /\_/\   z`,
-				`( -.- )  Z`,
-				` > - <  z `,
-			}
-		} else {
-			frame = []string{
-				` /\_/\  z `,
-				`( =.= ) Z `,
-				` > _ <   z`,
-			}
+		// tiny "breathing" variation: every other tick swap rows 0 and 2 trailing spaces
+		frame = pet.Sleep
+		if m.frame%2 == 1 {
+			frame[1] = swapTrailing(frame[1])
 		}
-	default: // happy
-		// Blink every 5 frames, wag tail alternately.
-		eyes := "( o.o )"
-		tail := " > ^ < ~"
+	default:
+		frame = pet.Happy
+		// Blink every 5 frames for cats/foxes/etc (only affects eye row).
 		if m.frame%5 == 0 {
-			eyes = "( -.- )"
-		}
-		if m.frame%2 == 0 {
-			tail = " > ^ < ~"
-		} else {
-			tail = " > ^ <  ~"
-		}
-		frame = []string{
-			` /\_/\ `,
-			eyes,
-			tail,
+			frame[1] = blink(frame[1])
 		}
 	}
 
-	// Stats line (age = uptime-ish ticks, hearts from healthy apps).
+	// Stats line (hearts from running apps, skulls from crashed).
 	apps := m.store.ListApps()
 	running := 0
 	crashed := 0
@@ -755,20 +735,21 @@ func (m Model) renderCat(width int) string {
 			crashed++
 		}
 	}
-	hearts := strings.Repeat("♥ ", running)
-	if hearts == "" {
+	var hearts string
+	if running == 0 {
 		hearts = lipgloss.NewStyle().Foreground(ColorDim).Render("· · ·")
 	} else {
-		hearts = lipgloss.NewStyle().Foreground(ColorRed).Render(strings.TrimSpace(hearts))
+		hearts = lipgloss.NewStyle().Foreground(ColorRed).Render(strings.TrimSpace(strings.Repeat("♥ ", running)))
 	}
 	skulls := ""
 	if crashed > 0 {
-		skulls = " " + lipgloss.NewStyle().Foreground(ColorRed).Render(strings.Repeat("☠ ", crashed))
+		skulls = " " + lipgloss.NewStyle().Foreground(ColorRed).Render(strings.TrimSpace(strings.Repeat("☠ ", crashed)))
 	}
 
-	name := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render("ring0-chan")
+	name := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(pet.Name)
 	moodTxt := lipgloss.NewStyle().Foreground(labelColor).Render(label)
-	stats := fmt.Sprintf("%s  %s  %s%s", name, moodTxt, hearts, skulls)
+	hint := lipgloss.NewStyle().Foreground(ColorDim).Render("[p] next buddy")
+	stats := fmt.Sprintf("%s  %s  %s%s   %s", name, moodTxt, hearts, skulls, hint)
 
 	catStyle := lipgloss.NewStyle().Foreground(ColorAccent)
 	catBlock := lipgloss.JoinVertical(lipgloss.Left,
@@ -776,17 +757,34 @@ func (m Model) renderCat(width int) string {
 		catStyle.Render(frame[1]),
 		catStyle.Render(frame[2]),
 	)
-
-	// Stats centered vertically next to the pet.
 	statsBlock := lipgloss.NewStyle().PaddingLeft(2).Render("\n" + stats + "\n")
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top, catBlock, statsBlock)
-	// Right-align within width so the pet sits at the bottom-right.
 	rowW := lipgloss.Width(row)
 	if rowW >= width {
 		return row
 	}
-	return strings.Repeat(" ", width-rowW) + row
+	return row + strings.Repeat(" ", width-rowW)
+}
+
+// blink replaces letter-like eye chars with closed-eye equivalents.
+func blink(s string) string {
+	r := strings.NewReplacer(
+		"o", "-", "O", "-", "^", "-", "@", "-",
+		".", "_",
+	)
+	return r.Replace(s)
+}
+
+// swapTrailing toggles trailing spaces/z for a subtle breathing effect.
+func swapTrailing(s string) string {
+	if strings.HasSuffix(s, " Z") {
+		return strings.TrimSuffix(s, " Z") + "z "
+	}
+	if strings.HasSuffix(s, "Z ") {
+		return strings.TrimSuffix(s, "Z ") + " Z"
+	}
+	return s
 }
 
 // petMood derives the pet's state from app statuses.
