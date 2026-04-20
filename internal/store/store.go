@@ -34,6 +34,12 @@ func New() (*Store, error) {
 	if data, err := os.ReadFile(p); err == nil {
 		_ = json.Unmarshal(data, s)
 	}
+	// Nothing is actually running at launch. Clear any stale running/crashed
+	// statuses so the UI reflects reality.
+	for _, a := range s.Apps {
+		a.Status = model.StatusStopped
+		a.PID = 0
+	}
 	return s, nil
 }
 

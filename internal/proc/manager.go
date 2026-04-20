@@ -39,8 +39,9 @@ type StatusEvent struct {
 }
 
 type managed struct {
-	cmd    *exec.Cmd
-	cancel chan struct{}
+	cmd        *exec.Cmd
+	cancel     chan struct{}
+	stopping   bool // true if Stop() was called — don't flag exit as crash
 }
 
 func NewManager() *Manager {
@@ -115,18 +116,24 @@ func (m *Manager) Start(a *model.App) error {
 	go func() {
 		err := cmd.Wait()
 		exit := 0
-		status := model.StatusStopped
 		if err != nil {
 			if ee, ok := err.(*exec.ExitError); ok {
 				exit = ee.ExitCode()
 			} else {
 				exit = -1
 			}
-			status = model.StatusCrashed
 		}
 		m.mu.Lock()
-		delete(m.procs, a.ID)
+		stopping := false
+		if cur, ok := m.procs[a.ID]; ok && cur == mp {
+			stopping = cur.stopping
+			delete(m.procs, a.ID)
+		}
 		m.mu.Unlock()
+		status := model.StatusStopped
+		if err != nil && !stopping {
+			status = model.StatusCrashed
+		}
 		a.Status = status
 		a.ExitCode = exit
 		a.PID = 0
@@ -138,6 +145,9 @@ func (m *Manager) Start(a *model.App) error {
 func (m *Manager) Stop(a *model.App) error {
 	m.mu.Lock()
 	mp, ok := m.procs[a.ID]
+	if ok {
+		mp.stopping = true
+	}
 	m.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("not running")

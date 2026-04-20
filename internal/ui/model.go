@@ -342,11 +342,14 @@ func (m Model) keyApps(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "s":
 		if a := m.currentApp(); a != nil {
-			m.pm.UpdateAndStart(a)
-			m.active = PanelLogs
-			m.logFollow = true
-			m.logScroll = 0
-			m.flash(toastInfo, "▶ starting "+a.Name+"…")
+			if err := m.pm.Start(a); err != nil {
+				m.flash(toastErr, "✖ "+err.Error())
+			} else {
+				m.active = PanelLogs
+				m.logFollow = true
+				m.logScroll = 0
+				m.flash(toastInfo, "▶ starting "+a.Name+"…")
+			}
 		}
 		return m, nil
 	case "x":
@@ -358,11 +361,23 @@ func (m Model) keyApps(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "r":
 		if a := m.currentApp(); a != nil {
+			if err := m.pm.Restart(a); err != nil {
+				m.flash(toastErr, "✖ "+err.Error())
+			} else {
+				m.active = PanelLogs
+				m.logFollow = true
+				m.logScroll = 0
+				m.flash(toastInfo, "↻ restarting "+a.Name+"…")
+			}
+		}
+		return m, nil
+	case "u":
+		if a := m.currentApp(); a != nil {
 			m.pm.UpdateAndStart(a)
 			m.active = PanelLogs
 			m.logFollow = true
 			m.logScroll = 0
-			m.flash(toastInfo, "↻ restarting "+a.Name+"…")
+			m.flash(toastInfo, "↓ update+start "+a.Name+"…")
 		}
 		return m, nil
 	case "l":
@@ -794,7 +809,7 @@ func (m Model) contextKeys() string {
 	common := "tab:panel  /:search  q:quit"
 	switch m.active {
 	case PanelApps:
-		return "a:add  s:start  x:stop  r:restart  l:logs  d:del  " + common
+		return "a:add  s:start  x:stop  r:restart  u:update  l:logs  d:del  " + common
 	case PanelRoutes:
 		return "a:add  e:edit  d:del  " + common
 	case PanelLogs:
