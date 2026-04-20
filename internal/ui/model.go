@@ -667,9 +667,8 @@ func (m Model) View() string {
 
 	header := m.renderHeader(ew)
 	footer := m.renderFooter(ew)
-	cat := m.renderCat(ew)
 
-	bodyH := eh - lipgloss.Height(header) - lipgloss.Height(footer) - lipgloss.Height(cat)
+	bodyH := eh - lipgloss.Height(header) - lipgloss.Height(footer)
 	if bodyH < 6 {
 		bodyH = 6
 	}
@@ -688,7 +687,7 @@ func (m Model) View() string {
 	right := lipgloss.JoinVertical(lipgloss.Left, sysv, logs)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 
-	out := lipgloss.JoinVertical(lipgloss.Left, cat, header, body, footer)
+	out := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 
 	if m.mode == ModeForm {
 		out = m.overlay(out, m.viewForm())
@@ -698,73 +697,6 @@ func (m Model) View() string {
 
 	// Apply outer margin.
 	return lipgloss.NewStyle().Margin(marginY, marginX).Render(out)
-}
-
-// renderCat draws the selected Tamagotchi-style pet that reacts to app state.
-func (m Model) renderCat(width int) string {
-	pet := PetByID(m.store.Pet)
-	mood, label, labelColor := m.petMood()
-
-	var frame [3]string
-	switch mood {
-	case "alert":
-		frame = pet.Alert
-	case "sleep":
-		// tiny "breathing" variation: every other tick swap rows 0 and 2 trailing spaces
-		frame = pet.Sleep
-		if m.frame%2 == 1 {
-			frame[1] = swapTrailing(frame[1])
-		}
-	default:
-		frame = pet.Happy
-		// Blink every 5 frames for cats/foxes/etc (only affects eye row).
-		if m.frame%5 == 0 {
-			frame[1] = blink(frame[1])
-		}
-	}
-
-	// Stats line (hearts from running apps, skulls from crashed).
-	apps := m.store.ListApps()
-	running := 0
-	crashed := 0
-	for _, a := range apps {
-		if a.Status == model.StatusRunning {
-			running++
-		}
-		if a.Status == model.StatusCrashed {
-			crashed++
-		}
-	}
-	var hearts string
-	if running == 0 {
-		hearts = lipgloss.NewStyle().Foreground(ColorDim).Render("· · ·")
-	} else {
-		hearts = lipgloss.NewStyle().Foreground(ColorRed).Render(strings.TrimSpace(strings.Repeat("♥ ", running)))
-	}
-	skulls := ""
-	if crashed > 0 {
-		skulls = " " + lipgloss.NewStyle().Foreground(ColorRed).Render(strings.TrimSpace(strings.Repeat("☠ ", crashed)))
-	}
-
-	name := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(pet.Name)
-	moodTxt := lipgloss.NewStyle().Foreground(labelColor).Render(label)
-	hint := lipgloss.NewStyle().Foreground(ColorDim).Render("[p] next buddy")
-	stats := fmt.Sprintf("%s  %s  %s%s   %s", name, moodTxt, hearts, skulls, hint)
-
-	catStyle := lipgloss.NewStyle().Foreground(ColorAccent)
-	catBlock := lipgloss.JoinVertical(lipgloss.Left,
-		catStyle.Render(frame[0]),
-		catStyle.Render(frame[1]),
-		catStyle.Render(frame[2]),
-	)
-	statsBlock := lipgloss.NewStyle().PaddingLeft(2).Render("\n" + stats + "\n")
-
-	row := lipgloss.JoinHorizontal(lipgloss.Top, catBlock, statsBlock)
-	rowW := lipgloss.Width(row)
-	if rowW >= width {
-		return row
-	}
-	return row + strings.Repeat(" ", width-rowW)
 }
 
 // blink replaces letter-like eye chars with closed-eye equivalents.
@@ -979,7 +911,75 @@ func (m Model) viewSystem(w, h int) string {
 	}
 	summary := StyleDim.Render(fmt.Sprintf("apps: %d running / %d total    routes: %d",
 		running, len(apps), len(m.store.ListRoutes())))
-	return strings.Join([]string{cpu, mem + memTxt, "", spark, mspark, "", summary}, "\n")
+
+	top := strings.Join([]string{cpu, mem + memTxt, "", spark, mspark, "", summary}, "\n")
+
+	// Build the pet area: stats line + 3-row pet + floor. Always rendered.
+	petStats, petFrame := m.petBlock()
+	floor := lipgloss.NewStyle().Foreground(ColorDim).Render(strings.Repeat("‾", w))
+
+	topH := strings.Count(top, "\n") + 1
+	petH := 1 + 3 + 1 // stats + 3 rows + floor
+	gap := h - topH - petH
+	if gap < 0 {
+		gap = 0
+	}
+	spacer := strings.Repeat("\n", gap)
+
+	return top + spacer + "\n" + petStats + "\n" + petFrame + "\n" + floor
+}
+
+// petBlock returns the pet's 1-line stats string and the 3-row ASCII frame,
+// both themed to the currently selected buddy + mood.
+func (m Model) petBlock() (stats, frame string) {
+	pet := PetByID(m.store.Pet)
+	mood, label, labelColor := m.petMood()
+
+	var f [3]string
+	switch mood {
+	case "alert":
+		f = pet.Alert
+	case "sleep":
+		f = pet.Sleep
+		if m.frame%2 == 1 {
+			f[1] = swapTrailing(f[1])
+		}
+	default:
+		f = pet.Happy
+		if m.frame%5 == 0 {
+			f[1] = blink(f[1])
+		}
+	}
+
+	apps := m.store.ListApps()
+	running, crashed := 0, 0
+	for _, a := range apps {
+		if a.Status == model.StatusRunning {
+			running++
+		}
+		if a.Status == model.StatusCrashed {
+			crashed++
+		}
+	}
+	var hearts string
+	if running == 0 {
+		hearts = lipgloss.NewStyle().Foreground(ColorDim).Render("· · ·")
+	} else {
+		hearts = lipgloss.NewStyle().Foreground(ColorRed).Render(strings.TrimSpace(strings.Repeat("♥ ", running)))
+	}
+	skulls := ""
+	if crashed > 0 {
+		skulls = " " + lipgloss.NewStyle().Foreground(ColorRed).Render(strings.TrimSpace(strings.Repeat("☠ ", crashed)))
+	}
+	name := lipgloss.NewStyle().Foreground(ColorAccent).Bold(true).Render(pet.Name)
+	moodTxt := lipgloss.NewStyle().Foreground(labelColor).Render(label)
+	hint := lipgloss.NewStyle().Foreground(ColorDim).Render("[p] next")
+	stats = fmt.Sprintf("%s  %s  %s%s   %s", name, moodTxt, hearts, skulls, hint)
+
+	catStyle := lipgloss.NewStyle().Foreground(ColorAccent)
+	frame = lipgloss.JoinVertical(lipgloss.Left,
+		catStyle.Render(f[0]), catStyle.Render(f[1]), catStyle.Render(f[2]))
+	return
 }
 
 func (m Model) viewLogs(w, h int) string {
