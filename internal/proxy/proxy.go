@@ -191,8 +191,10 @@ func newReverseProxy(target *url.URL, prefix string, strip bool) *httputil.Rever
 			scheme = "https"
 		}
 		origHost := req.Host
-		orig(req)
-		req.Host = target.Host
+		// Strip the incoming prefix BEFORE the default director joins it with
+		// the target path. This gives nginx-style behavior:
+		//   route /hello → http://localhost:3000/api  (strip=true)
+		//   request /hello/world → upstream /api/world
 		if strip && prefix != "/" {
 			p := strings.TrimPrefix(req.URL.Path, prefix)
 			if p == "" {
@@ -200,6 +202,8 @@ func newReverseProxy(target *url.URL, prefix string, strip bool) *httputil.Rever
 			}
 			req.URL.Path = p
 		}
+		orig(req)
+		req.Host = target.Host
 		if clientIP != "" {
 			if prior := req.Header.Get("X-Forwarded-For"); prior != "" {
 				req.Header.Set("X-Forwarded-For", prior+", "+clientIP)

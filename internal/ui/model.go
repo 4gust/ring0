@@ -540,9 +540,9 @@ func (m *Model) openRouteForm(r *model.Route) {
 	}
 	m.inputIdx = 0
 	m.inputs = []textinput.Model{
-		newInput("Path     ", "/api"),
+		newInput("Path     ", "/hello  (incoming path to match)"),
 		newInput("Host     ", "(optional)"),
-		newInput("Port     ", "3000  (omit if Redirect set)"),
+		newInput("Target   ", "3000 or localhost:3000/api  (omit if Redirect set)"),
 		newInput("Vis      ", "public|private"),
 		newInput("Strip    ", "y|n  (strip path prefix before forwarding)"),
 		newInput("Redirect ", "https://example.com  (optional, sends 308)"),
@@ -550,7 +550,11 @@ func (m *Model) openRouteForm(r *model.Route) {
 	if r != nil {
 		m.inputs[0].SetValue(r.Path)
 		m.inputs[1].SetValue(r.Host)
-		m.inputs[2].SetValue(fmt.Sprintf("%d", r.TargetPort))
+		if len(r.Upstreams) > 0 {
+			m.inputs[2].SetValue(r.Upstreams[0])
+		} else if r.TargetPort > 0 {
+			m.inputs[2].SetValue(fmt.Sprintf("%d", r.TargetPort))
+		}
 		m.inputs[3].SetValue(string(r.Visibility))
 		if r.StripPrefix {
 			m.inputs[4].SetValue("y")
@@ -614,8 +618,16 @@ func (m Model) submitForm() (tea.Model, tea.Cmd) {
 		_ = m.store.Save()
 		m.flash(toastOK, "✔ added "+a.Name)
 	case formAddRoute, formEditRoute:
-		port := 0
-		fmt.Sscanf(strings.TrimSpace(m.inputs[2].Value()), "%d", &port)
+		target := strings.TrimSpace(m.inputs[2].Value())
+		var port int
+		var upstreams []string
+		// If target is purely numeric, treat as a port; otherwise as upstream URL.
+		if _, err := fmt.Sscanf(target, "%d", &port); err != nil || fmt.Sprintf("%d", port) != target {
+			port = 0
+			if target != "" {
+				upstreams = []string{target}
+			}
+		}
 		vis := model.Visibility(strings.ToLower(strings.TrimSpace(m.inputs[3].Value())))
 		if vis != model.Public && vis != model.Private {
 			vis = model.Private
@@ -628,6 +640,7 @@ func (m Model) submitForm() (tea.Model, tea.Cmd) {
 			Path:        strings.TrimSpace(m.inputs[0].Value()),
 			Host:        strings.TrimSpace(m.inputs[1].Value()),
 			TargetPort:  port,
+			Upstreams:   upstreams,
 			Visibility:  vis,
 			StripPrefix: strip,
 			Redirect:    strings.TrimSpace(m.inputs[5].Value()),

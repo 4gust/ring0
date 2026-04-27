@@ -1,9 +1,11 @@
 package proxy
 
 import (
+	"bufio"
 	"compress/gzip"
 	"crypto/subtle"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -228,6 +230,13 @@ func (s *statusRecorder) Write(b []byte) (int, error) {
 	n, err := s.ResponseWriter.Write(b)
 	s.size += n
 	return n, err
+}
+
+func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := s.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, fmt.Errorf("underlying ResponseWriter does not support hijacking")
 }
 
 // accessLogMW writes Combined-Log-Format-ish lines to w (e.g. an open file).
