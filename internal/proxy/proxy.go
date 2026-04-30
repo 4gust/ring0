@@ -127,7 +127,10 @@ func (s *Server) Reload(rs []*model.Route) {
 				http.Redirect(w, req, redir, http.StatusPermanentRedirect)
 			})
 		case e.staticDir != "":
-			fs := http.FileServer(http.Dir(e.staticDir))
+			var fs http.Handler = http.FileServer(http.Dir(e.staticDir))
+			if r.SPAFallback {
+				fs = spaFallbackHandler(e.staticDir, fs)
+			}
 			if r.StripPrefix && r.Path != "/" {
 				inner = http.StripPrefix(r.Path, fs)
 			} else {
@@ -141,7 +144,7 @@ func (s *Server) Reload(rs []*model.Route) {
 			if len(ups) == 0 {
 				continue
 			}
-			pool := newUpstreamPool(ups, r.Path, r.StripPrefix)
+			pool := newUpstreamPool(ups, r.Path, r.StripPrefix, r.RewritePrefix)
 			pool.startHealthChecks(hcCtx, r.HealthPath, 5*time.Second)
 			e.pool = pool
 			if len(pool.all) > 0 {
@@ -181,7 +184,12 @@ func (s *Server) Reload(rs []*model.Route) {
 }
 
 // newReverseProxy is shared by upstream.go.
-func newReverseProxy(target *url.URL, prefix string, strip bool) *httputil.ReverseProxy {
+//
+// Path rewriting precedence:
+//   - rewrite != ""     → req.URL.Path becomes rewrite + leftover
+//   - else strip==true  → req.URL.Path becomes leftover (strip the prefix)
+//   - else              → req.URL.Path is unchanged
+func newReverseProxy(target *url.URL, prefix string, strip bool, rewrite string) *httputil.ReverseProxy {
 	rp := httputil.NewSingleHostReverseProxy(target)
 	orig := rp.Director
 	rp.Director = func(req *http.Request) {
@@ -191,16 +199,23 @@ func newReverseProxy(target *url.URL, prefix string, strip bool) *httputil.Rever
 			scheme = "https"
 		}
 		origHost := req.Host
-		// Strip the incoming prefix BEFORE the default director joins it with
-		// the target path. This gives nginx-style behavior:
-		//   route /hello → http://localhost:3000/api  (strip=true)
-		//   request /hello/world → upstream /api/world
-		if strip && prefix != "/" {
-			p := strings.TrimPrefix(req.URL.Path, prefix)
-			if p == "" {
-				p = "/"
+		// Rewrite the incoming prefix BEFORE the default director joins it
+		// with the target path.
+		if prefix != "/" {
+			leftover := strings.TrimPrefix(req.URL.Path, prefix)
+			switch {
+			case rewrite != "":
+				p := rewrite + leftover
+				if p == "" {
+					p = "/"
+				}
+				req.URL.Path = p
+			case strip:
+				if leftover == "" {
+					leftover = "/"
+				}
+				req.URL.Path = leftover
 			}
-			req.URL.Path = p
 		}
 		orig(req)
 		req.Host = target.Host
@@ -335,4 +350,43 @@ func openAccessLog(path string) (*os.File, error) {
 	}
 	_ = os.MkdirAll(filepath.Dir(path), 0o755)
 	return os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+}
+
+// spaFallbackHandler wraps a static file handler so that any request
+// resolving to a missing file or a directory without an index.html falls
+// back to serving <root>/index.html with HTTP 200. This is required for
+// client-side routers (React Router, Vue Router, etc.) so deep-link page
+// refreshes work.
+func spaFallbackHandler(root string, fs http.Handler) http.Handler {
+	indexPath := filepath.Join(root, "index.html")
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Only fall back on safe methods.
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			fs.ServeHTTP(w, r)
+			return
+		}
+		upath := r.URL.Path
+		if !strings.HasPrefix(upath, "/") {
+			upath = "/" + upath
+		}
+		// filepath.Clean strips ".." segments — http.FileServer does the
+		// same, so we get matching path resolution.
+		full := filepath.Join(root, filepath.Clean(upath))
+		fi, err := os.Stat(full)
+		switch {
+		case err == nil && !fi.IsDir():
+			// Real file — serve it.
+			fs.ServeHTTP(w, r)
+		case err == nil && fi.IsDir():
+			// Directory — let the file server serve its index if present.
+			if _, err := os.Stat(filepath.Join(full, "index.html")); err == nil {
+				fs.ServeHTTP(w, r)
+				return
+			}
+			http.ServeFile(w, r, indexPath)
+		default:
+			// Missing — SPA fallback.
+			http.ServeFile(w, r, indexPath)
+		}
+	})
 }

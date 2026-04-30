@@ -85,6 +85,13 @@ func (m *Manager) Start(a *model.App) error {
 	if a.Cwd != "" {
 		cmd.Dir = a.Cwd
 	}
+	if len(a.Env) > 0 {
+		env := os.Environ()
+		for k, v := range a.Env {
+			env = append(env, k+"="+v)
+		}
+		cmd.Env = env
+	}
 	// Put each child in its own process group so a signal to ring0
 	// (or a sibling app crashing) does not cascade to every app.
 	setPgid(cmd)
@@ -138,6 +145,27 @@ func (m *Manager) Start(a *model.App) error {
 		a.ExitCode = exit
 		a.PID = 0
 		m.emitStatus(a.ID, status, 0, exit)
+
+		// AutoRestart: if the process crashed (not user-stopped) and the
+		// app opted in, schedule a respawn after RestartDelaySec (default 3s).
+		if status == model.StatusCrashed && a.AutoRestart {
+			delay := a.RestartDelaySec
+			if delay <= 0 {
+				delay = 3
+			}
+			m.pushLog(a.ID,
+				fmt.Sprintf("[ring0] crashed (exit=%d); auto-restart in %ds…", exit, delay),
+				true)
+			time.AfterFunc(time.Duration(delay)*time.Second, func() {
+				// Skip if user has since deleted/started the app.
+				if m.Running(a.ID) {
+					return
+				}
+				if err := m.Start(a); err != nil {
+					m.pushLog(a.ID, "✖ auto-restart failed: "+err.Error(), true)
+				}
+			})
+		}
 	}()
 	return nil
 }

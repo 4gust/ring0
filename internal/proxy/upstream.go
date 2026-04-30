@@ -24,7 +24,7 @@ type upstream struct {
 	proxy   *httputil.ReverseProxy
 }
 
-func newUpstreamPool(rawURLs []string, prefix string, strip bool) *upstreamPool {
+func newUpstreamPool(rawURLs []string, prefix string, strip bool, rewrite string) *upstreamPool {
 	p := &upstreamPool{}
 	for _, raw := range rawURLs {
 		raw = strings.TrimSpace(raw)
@@ -39,7 +39,7 @@ func newUpstreamPool(rawURLs []string, prefix string, strip bool) *upstreamPool 
 		if err != nil {
 			continue
 		}
-		up := &upstream{url: u, proxy: newReverseProxy(u, prefix, strip)}
+		up := &upstream{url: u, proxy: newReverseProxy(u, prefix, strip, rewrite)}
 		up.healthy.Store(true)
 		p.all = append(p.all, up)
 	}
